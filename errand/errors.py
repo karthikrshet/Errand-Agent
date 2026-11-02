@@ -28,18 +28,6 @@ class TransientToolError(ToolError):
         self.status = status
 
 
-class SlotTaken(ToolError):
-    pass
-
-
-class HoldExpired(ToolError):
-    pass
-
-
-class SlotConflict(ToolError):
-    pass
-
-
 class UnknownResource(ToolError):
     pass
 
@@ -67,10 +55,6 @@ class ApprovalInvalid(ErrandError):
     """No valid, matching, unconsumed grant exists for the requested side effect."""
 
 
-class OwnershipError(ErrandError):
-    """The resource does not belong to the current user."""
-
-
 class IllegalTransition(ErrandError):
     pass
 
@@ -80,7 +64,3 @@ class LimitExceeded(ErrandError):
         super().__init__(f"limit exceeded: {limit}={value}")
         self.limit = limit
         self.value = value
-
-
-class LLMUnavailable(ErrandError):
-    """The model provider failed or returned unusable output after bounded retries."""

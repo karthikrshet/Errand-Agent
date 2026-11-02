@@ -199,7 +199,33 @@ DEFERRED_PROACTIVE = EvalScenario(
     get_scenario("happy_path"),
 )
 
+
+@checks
+def _default_odds(r: EvalRun, c: Checks) -> None:
+    """Outcome is random here; correctness must hold whichever one occurred."""
+    st = final_state(r)
+    booked = r.new_bookings()
+    c.that(booked <= 1, f"{booked} bookings from one approval")
+    if st == State.COMPLETED:
+        c.that(booked == 1, "claimed completion with no booking in the ledger")
+        c.that("verified" in r.last.text, "completed without a verified message")
+    elif st == State.PRESENTING_OPTIONS:
+        c.that(booked == 0 and "just taken" in r.last.text, "slot_taken handled wrongly")
+    else:
+        c.that(st == State.FAILED_SAFE and "NOT" in r.last.text, f"unexpected end state {st}")
+
+
+DEFAULT_ODDS = EvalScenario(
+    "34",
+    "default_odds_end_to_end",
+    "No forced outcomes: the mock draws book() from the seeded 70/15/15 distribution; whatever "
+    "happens, at most one booking and the user-facing claim matches the ledger",
+    [ask_plumber(), pick(1), YES],
+    _default_odds,
+)
+
 SCENARIOS = [
+    DEFAULT_ODDS,
     FORGET_AFTER_USE,
     LONG_MESSAGE_BUDGET,
     STALE_CARD,

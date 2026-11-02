@@ -32,7 +32,7 @@ from errand.clock import Clock
 from errand.config import Settings
 from errand.domain.request import age_sources
 from errand.domain.time import to_ist
-from errand.errors import ApprovalInvalid, IllegalTransition, LimitExceeded
+from errand.errors import ApprovalInvalid, LimitExceeded
 from errand.ids import IdFactory
 from errand.llm.base import LLMClient
 from errand.memory import commands as memory_cmd
@@ -215,7 +215,7 @@ class Agent:
             invalidate_pending(ctx, str(exc))
             ctx.say(r.approval_invalidated(str(exc)))
             self._stop_mid_flight(ctx, "approval invalid")
-        except (IllegalTransition, Exception) as exc:
+        except Exception as exc:
             ctx.tracer.emit("run.error", error=type(exc).__name__, message=str(exc))
             ctx.say(r.unexpected_error())
             self._stop_mid_flight(ctx, type(exc).__name__)

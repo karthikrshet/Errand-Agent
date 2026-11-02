@@ -117,13 +117,9 @@ def _duplicate_confirmation(ctx: RunContext, req: ApprovalRequest) -> None:
         ctx.state.pending_approval = None
         ctx.say(r.approval_invalidated("it was replaced or withdrawn"))
         return
-    ctx.tracer.emit(
-        "approval.duplicate_confirmation",
-        intent_id=existing.intent_id if existing else None,
-    )
-    if existing is not None:
-        ctx.state.intent_id = existing.intent_id
-        _finish_from_intent(ctx, existing)
+    ctx.tracer.emit("approval.duplicate_confirmation", intent_id=existing.intent_id)
+    ctx.state.intent_id = existing.intent_id
+    _finish_from_intent(ctx, existing)
 
 
 # ----------------------------------------------------------------------------- book
