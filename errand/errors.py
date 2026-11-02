@@ -48,6 +48,18 @@ class MalformedToolResponse(ToolError):
     pass
 
 
+class InvalidRequest(ToolError):
+    """The provider rejected the arguments (bad slot, past booking, ...)."""
+
+
+class PermissionDenied(ToolError):
+    """The authenticated caller may not act on this resource."""
+
+
+class IdempotencyConflict(ToolError):
+    """An idempotency key was reused with different arguments."""
+
+
 # --- agent-level ---
 
 
