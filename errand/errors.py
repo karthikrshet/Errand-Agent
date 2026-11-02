@@ -1,0 +1,74 @@
+"""Typed errors. Control flow branches on exception *types*, never on message strings."""
+
+from __future__ import annotations
+
+
+class ErrandError(Exception):
+    """Base for every error the system raises deliberately."""
+
+
+# --- tool-level (raised by the mock environment / gateway) ---
+
+
+class ToolError(ErrandError):
+    retryable: bool = False
+
+
+class ToolTimeout(ToolError):
+    """The call may or may not have taken effect. Callers must consult the source of truth."""
+
+    retryable = True
+
+
+class TransientToolError(ToolError):
+    retryable = True
+
+    def __init__(self, status: int = 503, message: str = "service unavailable") -> None:
+        super().__init__(f"{status}: {message}")
+        self.status = status
+
+
+class SlotTaken(ToolError):
+    pass
+
+
+class HoldExpired(ToolError):
+    pass
+
+
+class SlotConflict(ToolError):
+    pass
+
+
+class UnknownResource(ToolError):
+    pass
+
+
+class MalformedToolResponse(ToolError):
+    pass
+
+
+# --- agent-level ---
+
+
+class ApprovalInvalid(ErrandError):
+    """No valid, matching, unconsumed grant exists for the requested side effect."""
+
+
+class OwnershipError(ErrandError):
+    """The resource does not belong to the current user."""
+
+
+class IllegalTransition(ErrandError):
+    pass
+
+
+class LimitExceeded(ErrandError):
+    def __init__(self, limit: str, value: float) -> None:
+        super().__init__(f"limit exceeded: {limit}={value}")
+        self.limit = limit
+        self.value = value
+
+
+class LLMUnavailable(ErrandError):
+    """The model provider failed or returned unusable output after bounded retries."""

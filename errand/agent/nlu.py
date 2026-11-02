@@ -1,0 +1,1 @@
+"""LLM -> validated SlotPatch / Intent."""
