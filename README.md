@@ -149,8 +149,8 @@ The live adapter ([`errand/llm/anthropic_client.py`](errand/llm/anthropic_client
 
 `ANTHROPIC_API_KEY=... make record` records real-model cassettes into `evals/cassettes/`, and
 `make eval` replays them offline as extra `-rec` rows with the same checks and invariants.
-Committed recordings: scenarios **01** (full plumber booking) and **04** (reschedule) against
-`claude-opus-5-5`, both passing. Keys without a workspace scope also need
+Committed recordings: scenarios **01** (full plumber booking), **04** (reschedule) and **05**
+("same electrician as last time") against `claude-opus-5-5`, all passing. Keys without a workspace scope also need
 `ANTHROPIC_WORKSPACE_ID`. The first live run found two real defects (BUGS #9 and a scripted
 fixture that invented an area the user never gave); both are fixed.
 

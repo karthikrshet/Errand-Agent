@@ -31,7 +31,7 @@ The reviewer's weaknesses:
 | 1 | Major | A forgotten fact still reached the prompt via `request` fields in `<workflow_state>` | **Fixed** (BUGS #5) | reviewer repro re-run clean; eval `21b`; I4 |
 | 2 | Major | The "hard" context budget could be exceeded (3,944 > 2,550 tokens) | **Fixed** (BUGS #6) | repro now 1,249 tokens; property test over adversarial sizes; eval `23b` |
 | 3 | Major | A stale approval card stayed confirmable after a re-search; the grant was consumed | **Fixed** (BUGS #7) | repro re-run: no grant, no intent; eval `09b`; new invariant **I7** + mutation test |
-| 4 | Major | No evidence a real LLM was ever used | **Mostly closed** | scenarios 01 and 04 recorded against `claude-opus-5-5` (real usage: 7,527/437 and 2,370/76 tokens); they replay offline as `01-rec`/`04-rec` and pass. Scenario 05 must be re-recorded after its fixture was corrected (next row) |
+| 4 | Major | No evidence a real LLM was ever used | **Fixed** | scenarios 01, 04 and 05 recorded against `claude-opus-5-5` (real usage: 7,527/437, 2,370/76 and 8,257/537 tokens); they replay offline as `-rec` rows and pass under all invariants |
 | 5 | Major | A replacement promised mid-task was never delivered; the watcher was only a button | **Fixed** (BUGS #8) | eval `18b`; background watcher thread + web test with no click |
 | 6 | Minor | `forget` over-scrubbed ("1050 rupees" became "[forgotten]50") | **Fixed** (BUGS #5) | repro re-run; `tests/test_memory_forgetting.py` |
 | 7 | Minor | Eval blind spots: the forget path never applied to a request; I6 was tautological; all booking evals forced their outcomes | **Fixed** | eval `21b`; I6 now checks which run entered reserved states; eval `34` + a 40-seed test on the real 70/15/15 odds (hits success, `slot_taken` and both timeout paths) |
@@ -57,27 +57,20 @@ The reviewer's weaknesses:
 | 20+ evals asserting outcomes and invariants | Met: 43 scenarios, 7 invariants, mutation-tested |
 | Proactive follow-up | Met (deferred path and background watcher added) |
 | Context management | Met (hard budget on the exact prompt) |
-| Real LLM drives the agent | **Met:** recorded `claude-opus-5-5` runs of scenarios 01 and 04 pass under all invariants; 05 is pending re-record |
+| Real LLM drives the agent | **Met:** recorded `claude-opus-5-5` runs of scenarios 01, 04 and 05 pass under all invariants |
 | Design note, bugs, trace | Met: 8 real bugs, each with an existing regression test |
 | Demo video, AI transcripts | **Open:** the owner records and exports these |
 
 ## Current state (verified)
 
-- `make check test eval` passes offline: ruff, `mypy --strict`, about 215 tests, and 43/43 scenarios.
+- `make check test eval` passes offline: ruff, `mypy --strict`, 219 tests, and 46/46 eval rows (43 scripted scenarios + 3 real-LLM replays).
 - GitHub Actions CI passed on Linux.
 - The evals ran 300/300 in a stress loop on the concurrency scenario.
 
 ## What is still open, and how to close it
 
-1. **Re-record scenario 05** (its fixture changed). With a key:
-   ```bash
-   ANTHROPIC_API_KEY=sk-ant-... uv run python -m evals.record 05
-   uv run python tasks.py eval                                   # adds offline "-rec" rows
-   ```
-   Commit `evals/cassettes/*.jsonl` and the regenerated `evals/RESULTS.md`. A live
-   `make ui` session also leaves a trace in `traces/` with real token counts and cost.
-2. **Demo video:** follow [`docs/DEMO_SCRIPT.md`](DEMO_SCRIPT.md).
-3. **AI-assistant transcripts:** export this session into `docs/ai-transcripts/`.
+1. **Demo video:** follow [`docs/DEMO_SCRIPT.md`](DEMO_SCRIPT.md).
+2. **AI-assistant transcripts:** export this session into `docs/ai-transcripts/`.
 
 The "after" state has not been independently re-scored. A fresh review of the current commit
 would be the honest way to get one.
