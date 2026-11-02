@@ -18,6 +18,7 @@ from errand.agent.limits import RunBudget
 from errand.config import Settings
 from errand.domain.request import SlotPatch
 from errand.llm.base import LLMClient, LLMError, LLMRequest, LLMResponse, Message
+from errand.llm.tokens import count_tokens
 from errand.observability.trace import Tracer, estimate_cost_usd
 
 Intent = Literal[
@@ -43,6 +44,9 @@ MemoryKey = Literal[
     "language",
     "other",
 ]
+
+
+MAX_ECHO_CHARS = 2000  # cap the echoed invalid output in a repair round
 
 
 class _Strict(BaseModel):
@@ -118,10 +122,10 @@ class NLU:
         self.budget = budget
 
     def interpret(
-        self, user_text: str, context: str, today: dt.date, manifest: dict[str, object]
+        self, user_text: str, system: str, prompt: str, manifest: dict[str, object]
     ) -> NLUResult | None:
-        system = f"{SYSTEM_PROMPT}\n\nTODAY: {today.isoformat()} ({today:%A})"
-        messages = [Message(role="user", content=f"{context}\n\nUSER MESSAGE:\n{user_text}")]
+        """`system` and `prompt` are exactly what the ContextBuilder measured."""
+        messages = [Message(role="user", content=prompt)]
         errors = 0
         repairs = 0
         while True:
@@ -139,11 +143,9 @@ class NLU:
                 if repairs >= self.settings.llm_repair_attempts:
                     self.tracer.emit("llm.fallback", reason="invalid_output")
                     return None
-                repairs += 1
-                self.tracer.emit("llm.repair", errors=exc.error_count())
-                messages = [
+                repaired = [
                     *messages,
-                    Message(role="assistant", content=response.text),
+                    Message(role="assistant", content=response.text[:MAX_ECHO_CHARS]),
                     Message(
                         role="user",
                         content="Your output failed validation:\n"
@@ -151,6 +153,14 @@ class NLU:
                         + "\nReturn corrected JSON only.",
                     ),
                 ]
+                total = prompt_tokens(system, repaired)
+                if total > self.settings.effective_context_budget:
+                    self.tracer.emit("llm.fallback", reason="repair_over_budget", tokens=total)
+                    return None
+                repairs += 1
+                self.tracer.emit("llm.repair", errors=exc.error_count())
+                messages = repaired
+                manifest = {**manifest, "total_tokens": total, "repair_round": repairs}
 
     def _call(
         self,
@@ -189,6 +199,14 @@ class NLU:
                 context_manifest=json.loads(json.dumps(manifest, default=str)),
             )
             return response
+
+
+def system_prompt(today: dt.date) -> str:
+    return f"{SYSTEM_PROMPT}\n\nTODAY: {today.isoformat()} ({today:%A})"
+
+
+def prompt_tokens(system: str, messages: list[Message]) -> int:
+    return count_tokens(system) + sum(count_tokens(m.content) for m in messages)
 
 
 def _strip_fences(text: str) -> str:

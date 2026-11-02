@@ -53,4 +53,27 @@ FORGET_AFTER_USE = EvalScenario(
     _forget_after_use,
 )
 
-SCENARIOS = [FORGET_AFTER_USE]
+LONG_MESSAGE = "plumber please " + ("my kitchen tap is leaking badly " * 600)
+
+
+@checks
+def _long_message(r: EvalRun, c: Checks) -> None:
+    calls = [e for e in r.tracer.of_kind("model.call") if e.data.get("purpose") == "nlu"]
+    c.that(calls, "no model call")
+    m = calls[0].data["context_manifest"]
+    assert isinstance(m, dict)
+    c.that(m["user_message_truncated"] is True, "oversized message was not capped")
+    c.that(r.tracer.of_kind("context.user_message_truncated"), "truncation not traced")
+    c.that("which area" in r.last.text, "agent did not continue normally")
+
+
+LONG_MESSAGE_BUDGET = EvalScenario(
+    "23b",
+    "context_budget_oversized_message",
+    "A ~4k-token user message is capped to its share of the budget; the exact prompt stays "
+    "under the hard limit (I4) and the turn proceeds normally",
+    [Say(LONG_MESSAGE, nlu("request", service="plumber"))],
+    _long_message,
+)
+
+SCENARIOS = [FORGET_AFTER_USE, LONG_MESSAGE_BUDGET]

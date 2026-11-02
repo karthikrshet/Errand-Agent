@@ -27,7 +27,7 @@ def test_reschedule_to_parses_date_field() -> None:
 def test_valid_output_is_parsed_and_traced_with_manifest() -> None:
     client = ScriptedClient.from_map({"hi": nlu("request", service="plumber")})
     engine, tracer = _nlu(client)
-    out = engine.interpret("hi", "ctx", date(2026, 11, 2), {"total_tokens": 10})
+    out = engine.interpret("hi", "sys", "ctx", {"total_tokens": 10})
     assert isinstance(out, NLUResult)
     assert out.patch.service == "plumber"
     [call] = tracer.of_kind("model.call")
@@ -36,7 +36,7 @@ def test_valid_output_is_parsed_and_traced_with_manifest() -> None:
 
 def test_fenced_json_is_accepted() -> None:
     client = ScriptedClient.from_map({"hi": "```json\n" + nlu("status") + "\n```"})
-    out, _ = _nlu(client)[0].interpret("hi", "", date(2026, 11, 2), {}), None
+    out, _ = _nlu(client)[0].interpret("hi", "sys", "hi", {}), None
     assert out is not None
     assert out.intent == "status"
 
@@ -45,7 +45,7 @@ def test_invalid_output_gets_one_repair_then_succeeds() -> None:
     replies = iter(['{"intent": "teleport"}', nlu("status")])
     client = ScriptedClient(lambda _req: next(replies))
     engine, tracer = _nlu(client)
-    out = engine.interpret("hi", "", date(2026, 11, 2), {})
+    out = engine.interpret("hi", "sys", "hi", {})
     assert out is not None
     assert out.intent == "status"
     assert tracer.of_kind("llm.repair")
@@ -55,14 +55,14 @@ def test_invalid_output_gets_one_repair_then_succeeds() -> None:
 
 def test_invalid_twice_falls_back() -> None:
     engine, tracer = _nlu(ScriptedClient(lambda _req: "not json"))
-    assert engine.interpret("hi", "", date(2026, 11, 2), {}) is None
+    assert engine.interpret("hi", "sys", "hi", {}) is None
     assert tracer.of_kind("llm.fallback")[0].data["reason"] == "invalid_output"
 
 
 def test_provider_errors_retry_then_fall_back() -> None:
     client = ScriptedClient(failing())
     engine, tracer = _nlu(client)
-    assert engine.interpret("hi", "", date(2026, 11, 2), {}) is None
+    assert engine.interpret("hi", "sys", "hi", {}) is None
     assert len(client.requests) == 3  # 1 + llm_max_retries(2)
     assert tracer.of_kind("llm.fallback")[0].data["reason"] == "provider_error"
 
@@ -77,6 +77,6 @@ def test_transient_error_then_success() -> None:
         return nlu("status")
 
     engine, _ = _nlu(ScriptedClient(handler))
-    out = engine.interpret("hi", "", date(2026, 11, 2), {})
+    out = engine.interpret("hi", "sys", "hi", {})
     assert out is not None
     assert out.intent == "status"

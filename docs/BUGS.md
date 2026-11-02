@@ -36,3 +36,15 @@ Each entry: what broke, why, the fix, and the regression test that now guards it
 - **Why:** `forget` scrubbed the memory rows, turns and the current session's summary, but not the *derived copies*: request fields filled from that memory, or other sessions' state. A second issue in the same code: turns were scrubbed with a raw substring replace, so forgetting `earliest_hour=10` turned "1050 rupees" into "[forgotten]50".
 - **Fix:** `memory/forgetting.py`. On forget, clear every request field filled from that memory, or equal to its value, in every session of the user, and scrub every session summary. Scrub turns by whole word only, skipping short or purely numeric values, which can't be scrubbed from free text safely and identify nothing.
 - **Regression tests:** eval `21b memory_forget_after_value_used` (under I4), `tests/test_memory_forgetting.py`.
+
+## 6. The "hard" context budget could be exceeded (found by independent review)
+
+- **What broke:** a long user message produced a prompt of 3,944 tokens against an effective budget of 2,550, and invariant I4 fired.
+- **Why:** `ContextBuilder` capped only the optional sections (memories, summary, turns). The user message, the workflow state and the NLU's own wrapper (`TODAY:`, `USER MESSAGE:`) were charged without any cap, and repair rounds and the review summariser weren't budgeted at all. "Hard budget" was only true for typical inputs.
+- **Fix:**
+  - The builder now receives the exact system prompt and produces the exact user body.
+  - It gives the user message and the state capped shares (35% and 30%, truncating or compacting beyond that).
+  - It counts the joined prompt exactly and drops history until it fits.
+  - A repair round that would exceed the budget falls back instead.
+  - The review summariser keeps only the reviews that fit.
+- **Regression tests:** `tests/test_context_budget.py` (exact-count property over adversarial sizes) and eval `23b context_budget_oversized_message` under I4.

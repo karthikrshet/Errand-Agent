@@ -60,6 +60,7 @@ def summarize_reviews(
     reviews: Sequence[tuple[int, SanitizedText]],
 ) -> ReviewSummary:
     heuristic_flag = any(text.flags for _, text in reviews)
+    reviews = _fit_reviews(reviews, settings.effective_context_budget - count_tokens(PROMPT))
     body = (
         "<untrusted_data>\n"
         + "\n".join(f"[{stars}/5] {text.text}" for stars, text in reviews)
@@ -101,6 +102,21 @@ def summarize_reviews(
         # Code's detector wins ties: the model missing an injection never clears the flag.
         summary = summary.model_copy(update={"injection_suspected": True})
     return summary
+
+
+def _fit_reviews(
+    reviews: Sequence[tuple[int, SanitizedText]], limit: int
+) -> list[tuple[int, SanitizedText]]:
+    """Keep as many reviews as fit the budget (each is already length-capped)."""
+    kept: list[tuple[int, SanitizedText]] = []
+    used = count_tokens("<untrusted_data>\n</untrusted_data>")
+    for stars, text in reviews:
+        n = count_tokens(f"[{stars}/5] {text.text}\n")
+        if used + n > limit:
+            break
+        kept.append((stars, text))
+        used += n
+    return kept
 
 
 def fallback_summary(reviews: Sequence[tuple[int, SanitizedText]]) -> ReviewSummary:

@@ -53,6 +53,9 @@ class Manifest(BaseModel):
     turn_ids_included: list[int] = Field(default_factory=list)
     turns_dropped: int = 0
     summary_used: bool = False
+    user_message_truncated: bool = False
+    state_compacted: bool = False
+    trimmed_to_fit: bool = False
 
 
 class BuiltContext(BaseModel):
@@ -60,7 +63,7 @@ class BuiltContext(BaseModel):
     manifest: Manifest
 
 
-def render_state(state: WorkflowState) -> str:
+def render_state(state: WorkflowState, compact: bool = False) -> str:
     req = state.request.model_dump(exclude_defaults=True, mode="json")
     if state.request.budget_paise is not None:
         req["budget"] = format_inr(state.request.budget_paise)
@@ -71,11 +74,12 @@ def render_state(state: WorkflowState) -> str:
             for i, c in enumerate(state.candidates, 1)
         )
         lines.append(f"options shown: {opts}")
-        lines.extend(
-            render_for_model(c.provider_id, c.review_summary)
-            for c in state.candidates
-            if c.review_summary is not None
-        )
+        if not compact:
+            lines.extend(
+                render_for_model(c.provider_id, c.review_summary)
+                for c in state.candidates
+                if c.review_summary is not None
+            )
     if state.target_booking is not None:
         t = state.target_booking
         lines.append(f"target booking: {t.booking_id} {t.service} {t.slot.isoformat()}")
@@ -111,11 +115,37 @@ def render_summary(summary: str) -> str:
     return f"<conversation_summary>\n{summary}\n</conversation_summary>" if summary else ""
 
 
+USER_SHARE = 0.35  # max share of the budget the user's own message may take
+STATE_SHARE = 0.30  # max share for the workflow state block
+USER_HEADER = "USER MESSAGE:\n"
+
+
+def truncate_tokens(text: str, cap: int) -> tuple[str, bool]:
+    """Longest prefix of `text` within `cap` tokens (binary search on characters)."""
+    if count_tokens(text) <= cap:
+        return text, False
+    marker = " [truncated]"
+    lo, hi = 0, len(text)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if count_tokens(text[:mid] + marker) <= cap:
+            lo = mid
+        else:
+            hi = mid - 1
+    return text[:lo] + marker, True
+
+
 class ContextBuilder:
+    """Packs one model call under a hard budget, measured on the exact final prompt.
+
+    The user message and workflow state get capped shares; memories, summary and recent
+    turns fill what is left. If the exact count of the joined prompt is still over (join
+    separators, tokenizer edge cases), history is dropped until it fits.
+    """
+
     def __init__(self, budget_tokens: int, effective_budget_tokens: int) -> None:
         self.budget_tokens = budget_tokens
         self.limit = effective_budget_tokens
-        # Section joins add a few tokens per boundary that per-section counts don't see.
         self.effective = effective_budget_tokens - SEPARATOR_RESERVE
 
     def build(
@@ -129,6 +159,42 @@ class ContextBuilder:
         summary: str = "",
         turns: Sequence[Turn] = (),
     ) -> BuiltContext:
+        attempts: list[tuple[Sequence[MemoryView], str, Sequence[Turn]]] = [
+            (memories, summary, turns),
+            (memories, summary, turns[len(turns) // 2 :]),
+            (memories, summary, ()),
+            (memories, "", ()),
+            ((), "", ()),
+        ]
+        built = None
+        for mems, summ, ts in attempts:
+            if built is not None and built.manifest.total_tokens <= self.limit:
+                break
+            trimmed = built is not None
+            built = self._build(
+                system_prompt=system_prompt,
+                user_text=user_text,
+                state=state,
+                memories=mems,
+                summary=summ,
+                turns=ts,
+                excluded=excluded,
+            )
+            built.manifest.trimmed_to_fit = trimmed
+        assert built is not None
+        return built
+
+    def _build(
+        self,
+        *,
+        system_prompt: str,
+        user_text: str,
+        state: WorkflowState,
+        memories: Sequence[MemoryView],
+        summary: str,
+        turns: Sequence[Turn],
+        excluded: Sequence[Exclusion],
+    ) -> BuiltContext:
         m = Manifest(
             budget_tokens=self.budget_tokens,
             effective_budget_tokens=self.limit,
@@ -137,24 +203,36 @@ class ContextBuilder:
         )
         parts: list[str] = []
         used = self._charge(m, "system_prompt", system_prompt)
-        used += self._charge(m, "user_message", user_text)
-        for name, text in (
-            ("workflow_state", render_state(state)),
-            ("pending_approval", render_approval(state)),
-        ):
-            if text:
-                used += self._charge(m, name, text)
-                parts.append(text)
+        user, m.user_message_truncated = truncate_tokens(user_text, int(self.limit * USER_SHARE))
+        user_block = USER_HEADER + user
+        used += self._charge(m, "user_message", user_block)
+        state_text = self._state_block(state, m)
+        used += self._charge(m, "workflow_state", state_text)
+        parts.append(state_text)
+        approval = render_approval(state)
+        if approval:
+            used += self._charge(m, "pending_approval", approval)
+            parts.append(approval)
         used = self._add_memories(m, parts, memories, used)
         summary_text = render_summary(summary)
         if summary_text and used + count_tokens(summary_text) <= self.effective:
             used += self._charge(m, "summary", summary_text)
             parts.append(summary_text)
             m.summary_used = True
-        used = self._add_turns(m, parts, turns, used)
-        text = "\n\n".join(parts)
-        m.total_tokens = count_tokens(system_prompt) + count_tokens(user_text) + count_tokens(text)
+        self._add_turns(m, parts, turns, used)
+        text = "\n\n".join([*parts, user_block])
+        m.total_tokens = count_tokens(system_prompt) + count_tokens(text)
         return BuiltContext(text=text, manifest=m)
+
+    def _state_block(self, state: WorkflowState, m: Manifest) -> str:
+        cap = int(self.limit * STATE_SHARE)
+        text = render_state(state)
+        if count_tokens(text) > cap:
+            text = render_state(state, compact=True)
+            m.state_compacted = True
+        text, cut = truncate_tokens(text, cap)
+        m.state_compacted = m.state_compacted or cut
+        return text
 
     def _charge(self, m: Manifest, section: str, text: str) -> int:
         n = count_tokens(text)

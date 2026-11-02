@@ -23,7 +23,7 @@ from errand.agent.approval import Decision, classify_confirmation
 from errand.agent.approval_flow import classify_reply, invalidate_pending, reissue
 from errand.agent.crash import CrashHooks
 from errand.agent.limits import RunBudget
-from errand.agent.nlu import NLU, SYSTEM_PROMPT, BookingRef, NLUResult
+from errand.agent.nlu import NLU, BookingRef, NLUResult, system_prompt
 from errand.agent.policy import PolicyViolation
 from errand.agent.runtime import RunContext
 from errand.agent.state import TERMINAL, State, WorkflowState
@@ -315,8 +315,9 @@ class Agent:
     def _interpret(self, ctx: RunContext, text: str) -> NLUResult | None:
         self._refresh_summary(ctx)
         memories, excluded = self.memory.select_for_context(ctx.user_id, ctx.state.request)
+        system = system_prompt(to_ist(self.clock.now()).date())
         built = self.context.build(
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=system,
             user_text=text,
             state=ctx.state,
             memories=memories,
@@ -326,8 +327,9 @@ class Agent:
         )
         nlu = NLU(self.llm, self.settings, ctx.tracer, ctx.budget)
         ctx.state.counters.model_calls += 1
-        today = to_ist(self.clock.now()).date()
-        return nlu.interpret(text, built.text, today, built.manifest.model_dump(mode="json"))
+        if built.manifest.user_message_truncated:
+            ctx.tracer.emit("context.user_message_truncated")
+        return nlu.interpret(text, system, built.text, built.manifest.model_dump(mode="json"))
 
     def _dispatch(self, ctx: RunContext, result: NLUResult) -> None:
         handlers: dict[str, Callable[[RunContext, NLUResult], None]] = {
