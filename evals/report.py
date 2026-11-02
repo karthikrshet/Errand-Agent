@@ -14,13 +14,16 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
+from errand.llm.cassette import CassetteClient
 from evals.harness import EvalRun, EvalScenario, execute
 from evals.invariants import check_all
 from evals.scenarios import all_scenarios
 
 ROOT = Path(__file__).resolve().parent
 RUNS = ROOT / ".runs"
+CASSETTES = ROOT / "cassettes"
 
 
 @dataclass
@@ -55,8 +58,8 @@ def summarize(run: EvalRun) -> str:
     return "; ".join(parts)
 
 
-def run_one(sc: EvalScenario) -> Row:
-    run = execute(sc, RUNS / sc.sid)
+def run_one(sc: EvalScenario, llm: Any = None, suffix: str = "") -> Row:
+    run = execute(sc, RUNS / (sc.sid + suffix), llm)
     own = sc.check(run)
     invariants = check_all(run)
     inv_fail = [f"{k}: {m}" for k, msgs in invariants.items() for m in msgs]
@@ -71,7 +74,19 @@ def run_one(sc: EvalScenario) -> Row:
         f"{inv}; tool_calls={totals.tool_calls}; model_calls={totals.model_calls}; "
         f"tokens={totals.input_tokens}/{totals.output_tokens}; seed={sc.seed}"
     )
-    return Row(sc.sid, sc.name, sc.expected, summarize(run), not failures, notes, failures)
+    name = sc.name + (" [recorded real-LLM cassette]" if suffix else "")
+    return Row(sc.sid + suffix, name, sc.expected, summarize(run), not failures, notes, failures)
+
+
+def cassette_rows(scenarios: list[EvalScenario]) -> list[Row]:
+    """Replay every recorded cassette offline (real model output, no network)."""
+    rows = []
+    by_id = {s.sid: s for s in scenarios}
+    for path in sorted(CASSETTES.glob("*.jsonl")):
+        sc = by_id.get(path.stem)
+        if sc is not None:
+            rows.append(run_one(sc, CassetteClient(path), suffix="-rec"))
+    return rows
 
 
 def _git_sha() -> str:
@@ -130,6 +145,8 @@ def main(argv: list[str]) -> int:
     scenarios = [s for s in all_scenarios() if not only or s.sid in only or s.name in only]
     started = time.perf_counter()
     rows = [run_one(s) for s in scenarios]
+    if not only:
+        rows += cassette_rows(scenarios)
     elapsed = time.perf_counter() - started
     if not only:
         write(rows, elapsed)

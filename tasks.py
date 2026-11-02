@@ -44,6 +44,15 @@ def eval_() -> None:
     _run(PY, "-m", "evals.report")
 
 
+def record() -> None:
+    _run(PY, "-m", "evals.record")
+
+
+def trace() -> None:
+    """Regenerate traces/timeout_after_success.jsonl from its eval scenario."""
+    _run(PY, "-m", "evals.make_trace")
+
+
 def ui() -> None:
     _run(PY, "-m", "uvicorn", "errand.web.app:app", "--port", "8000")
 
@@ -56,6 +65,8 @@ TASKS: dict[str, Callable[[], None]] = {
     "test": test,
     "eval": eval_,
     "ui": ui,
+    "record": record,
+    "trace": trace,
 }
 
 

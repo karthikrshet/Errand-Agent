@@ -62,7 +62,17 @@ class Settings(BaseSettings):
     llm_max_retries: int = 2
     llm_repair_attempts: int = 1
     llm_timeout_s: float = 30.0
-    model_prices: dict[str, ModelPrice] = Field(default_factory=dict)
+    # NLU is extraction-shaped work; low effort keeps latency and cost down.
+    llm_effort: str = "low"
+    llm_server_fallback: bool = True
+    # USD per MTok, Anthropic first-party list prices (cached 2026-10-06). Estimates only.
+    model_prices: dict[str, ModelPrice] = Field(
+        default_factory=lambda: {
+            "claude-opus-5-5": ModelPrice(input_per_mtok=4.0, output_per_mtok=20.0),
+            "claude-sonnet-5-5": ModelPrice(input_per_mtok=2.0, output_per_mtok=10.0),
+            "claude-haiku-5-5": ModelPrice(input_per_mtok=0.10, output_per_mtok=0.50),
+        }
+    )
 
     # Hard limits (bounded execution)
     max_model_calls_per_turn: int = 8

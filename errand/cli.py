@@ -8,6 +8,7 @@ from typing import Annotated
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 
 from errand.app import build_world
@@ -81,7 +82,20 @@ def _line(e: TraceEvent) -> str:
         )
     if e.kind == "model.call":
         return f"{d.get('purpose')} in={d.get('input_tokens')} out={d.get('output_tokens')}"
-    keys = ("reason", "decision", "fingerprint", "booking_id", "flags", "limit", "user_text")
+    keys = (
+        "reason",
+        "decision",
+        "request_id",
+        "confirm_code",
+        "grant_id",
+        "booking_id",
+        "idempotency_key",
+        "flags",
+        "channel",
+        "limit",
+        "user_text",
+        "outcome",
+    )
     return " ".join(f"{k}={d[k]}" for k in keys if k in d)
 
 
@@ -91,7 +105,7 @@ def trace_show(path: Path) -> None:
     colours = {"security": "red", "approval": "yellow", "booking": "green", "limit": "magenta"}
     for e in load_trace(path):
         colour = colours.get(e.kind.split(".")[0], "white")
-        console.print(f"[dim]{e.seq:>4}[/dim] [{colour}]{e.kind:<28}[/{colour}] {_line(e)}")
+        console.print(f"[dim]{e.seq:>4}[/dim] [{colour}]{e.kind:<28}[/{colour}] {escape(_line(e))}")
 
 
 if __name__ == "__main__":

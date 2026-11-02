@@ -184,6 +184,7 @@ class NLU:
                 input_tokens=response.input_tokens,
                 output_tokens=response.output_tokens,
                 provider_input_tokens=response.provider_input_tokens,
+                estimated_input_tokens=manifest.get("total_tokens"),
                 cost_usd=cost,
                 context_manifest=json.loads(json.dumps(manifest, default=str)),
             )

@@ -120,7 +120,8 @@ class EvalRun:
     tracer: Tracer
     crash: CrashHooks
     world: World
-    llm: ScriptedClient
+    # ScriptedClient by default; a cassette or live (recording) client when replaying/recording.
+    llm: Any
     replies: list[Reply] = field(default_factory=list)
     crashes: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
@@ -192,7 +193,7 @@ def _build(run: EvalRun | None, sc: EvalScenario, workdir: Path, **kw: Any) -> W
     )
 
 
-def start(sc: EvalScenario, workdir: Path) -> EvalRun:
+def start(sc: EvalScenario, workdir: Path, llm: Any = None) -> EvalRun:
     if workdir.exists():
         shutil.rmtree(workdir)
     workdir.mkdir(parents=True)
@@ -201,7 +202,7 @@ def start(sc: EvalScenario, workdir: Path) -> EvalRun:
     tracer = Tracer(clock, f"eval-{sc.sid}", workdir / "trace.jsonl")
     crash = CrashHooks()
     run_ref: list[EvalRun] = []
-    llm = ScriptedClient(_handler(run_ref), model="scripted")
+    llm = llm if llm is not None else ScriptedClient(_handler(run_ref), model="scripted")
     world = _build(None, sc, workdir, settings=settings, llm=llm, clock=clock, crash=crash,
                    tracer=tracer)  # fmt: skip
     run = EvalRun(sc, workdir, clock, settings, tracer, crash, world, llm)
@@ -213,8 +214,8 @@ def _text(run: EvalRun, text: Text) -> str:
     return text(run) if callable(text) else text
 
 
-def execute(sc: EvalScenario, workdir: Path) -> EvalRun:
-    run = start(sc, workdir)
+def execute(sc: EvalScenario, workdir: Path, llm: Any = None) -> EvalRun:
+    run = start(sc, workdir, llm)
     for step in sc.steps:
         try:
             _step(run, step)
