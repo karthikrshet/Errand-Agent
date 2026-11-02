@@ -17,6 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from errand.agent import booking, manage_flow, search_flow
+from errand.agent import proactive as proactive_flow
 from errand.agent import responses as r
 from errand.agent.approval import Decision, classify_confirmation
 from errand.agent.approval_flow import classify_reply, invalidate_pending, reissue
@@ -94,7 +95,11 @@ class Agent:
         """Process (re)start: reconcile before accepting any new user input."""
         return self._serialised(session_id, None)
 
-    def _serialised(self, session_id: str, text: str | None) -> Reply:
+    def proactive_check(self, session_id: str) -> Reply:
+        """Watcher tick: detect provider cancellations with no user message involved."""
+        return self._serialised(session_id, None, proactive=True)
+
+    def _serialised(self, session_id: str, text: str | None, proactive: bool = False) -> Reply:
         """One turn at a time per session: in-process lock + a DB lease across processes.
         Booking correctness never depends on this (DB constraints are the real guard)."""
         owner = self.ids.new("lease")
@@ -108,7 +113,7 @@ class Agent:
                 self.wait(LEASE_POLL_S)
                 waited += LEASE_POLL_S
             try:
-                return self._run(session_id, text)
+                return self._run(session_id, text, proactive)
             finally:
                 self.store.release_lease(session_id, owner)
 
@@ -123,7 +128,7 @@ class Agent:
 
     # ------------------------------------------------------------------ run
 
-    def _run(self, session_id: str, text: str | None) -> Reply:
+    def _run(self, session_id: str, text: str | None, proactive: bool = False) -> Reply:
         state = self.load(session_id)
         tracer = self.tracer_for(session_id)
         budget = RunBudget(self.settings, self.clock)
@@ -161,7 +166,7 @@ class Agent:
             user_text=text,
             state=state.status.value,
         )
-        self._guarded(ctx, text)
+        self._guarded(ctx, text, proactive)
         if not ctx.replies:
             ctx.say(r.didnt_understand() if text is not None else r.status([]))
         try:
@@ -182,11 +187,13 @@ class Agent:
         tracer.end_turn()
         return Reply(text=reply_text, state=state, messages=list(ctx.replies))
 
-    def _guarded(self, ctx: RunContext, text: str | None) -> None:
+    def _guarded(self, ctx: RunContext, text: str | None, proactive: bool = False) -> None:
         """No exception escapes to the user. SimulatedCrash (BaseException) is not caught."""
         try:
             booking.recover(ctx)
-            if text is not None:
+            if proactive:
+                proactive_flow.check(ctx)
+            elif text is not None:
                 self._route(ctx, text)
         except StaleState:
             self._handled_elsewhere(ctx)

@@ -69,6 +69,12 @@ CREATE TABLE IF NOT EXISTS grants (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS grants_one_active
     ON grants(fingerprint) WHERE consumed_at IS NULL;
+CREATE TABLE IF NOT EXISTS proactive_seen (
+    user_id TEXT NOT NULL,
+    booking_id TEXT NOT NULL,
+    seen_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, booking_id)
+);
 CREATE TABLE IF NOT EXISTS session_leases (
     session_id TEXT PRIMARY KEY,
     owner TEXT NOT NULL,
@@ -280,6 +286,20 @@ class AgentStore:
                  grant_id, req.model_dump_json(), now.isoformat(), now.isoformat()),
             )  # fmt: skip
         return grant, intent
+
+    # ------------------------------------------------------------------ proactive watcher
+
+    def proactive_seen(self, user_id: str) -> set[str]:
+        rows = self.conn.execute(
+            "SELECT booking_id FROM proactive_seen WHERE user_id = ?", (user_id,)
+        ).fetchall()
+        return {str(r["booking_id"]) for r in rows}
+
+    def mark_proactive_seen(self, user_id: str, booking_id: str, now: datetime) -> None:
+        self.conn.execute(
+            "INSERT OR IGNORE INTO proactive_seen VALUES (?, ?, ?)",
+            (user_id, booking_id, now.isoformat()),
+        )
 
     # ------------------------------------------------------------------ session lease
 

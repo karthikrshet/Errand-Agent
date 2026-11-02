@@ -122,6 +122,24 @@ def code_mismatch(req: ApprovalRequest) -> str:
     )
 
 
+def provider_cancelled(provider: str, slot: datetime) -> str:
+    return f"Heads-up: {provider} cancelled your booking for {when(slot)}. You won't be charged."
+
+
+def proactive_later() -> str:
+    return "Once you've finished what we're doing, say 'find a replacement' and I'll look."
+
+
+def proactive_offer(name: str, reasons: Sequence[str], flagged: bool) -> str:
+    badge = (
+        " [!] Some of its reviews contained suspicious text, which I ignored." if flagged else ""
+    )
+    return (
+        f"I found a replacement within your known preferences: {name} ({'; '.join(reasons)})."
+        f"{badge} I've held the slot but booked nothing; it needs your fresh approval."
+    )
+
+
 def busy() -> str:
     return (
         "I'm still working on your previous message in this conversation. Nothing new was "

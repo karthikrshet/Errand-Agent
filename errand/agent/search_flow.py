@@ -10,7 +10,7 @@ from errand.agent.nlu import NLUResult, Selection
 from errand.agent.ranking import rank
 from errand.agent.review_summarizer import summarize_reviews
 from errand.agent.runtime import RunContext
-from errand.agent.state import Candidate, HoldInfo, State
+from errand.agent.state import Candidate, HoldInfo, State, Trigger
 from errand.agent.untrusted import sanitize
 from errand.domain.request import MATERIAL_FIELDS, merge_patch
 from errand.domain.time import to_ist
@@ -86,13 +86,13 @@ def search_and_present(ctx: RunContext) -> None:
         ctx.tracer.emit("search.nothing_fits", excluded=dict(ranked.excluded))
         ctx.say(r.nothing_fits(ranked.reason, ranked.suggestion))
         return
-    st.candidates = [_inspect(ctx, cand) for cand in ranked.candidates]
+    st.candidates = [inspect_candidate(ctx, cand) for cand in ranked.candidates]
     st.selected = None
     ctx.move(State.PRESENTING_OPTIONS, "tool_result", f"{len(st.candidates)} options")
     present(ctx)
 
 
-def _inspect(ctx: RunContext, cand: Candidate) -> Candidate:
+def inspect_candidate(ctx: RunContext, cand: Candidate) -> Candidate:
     """Fetch details and treat every free-text field as untrusted."""
     details = ctx.tool(
         "get_provider", c.GetProviderInput(provider_id=cand.provider_id), c.GetProviderOutput
@@ -179,14 +179,17 @@ def _resolve(
 
 
 def hold_selected(
-    ctx: RunContext, previous_price: int | None, previous_slot: datetime | None
+    ctx: RunContext,
+    previous_price: int | None,
+    previous_slot: datetime | None,
+    trigger: Trigger = "user_message",
 ) -> bool:
     """Hold the selected slot and ask for approval. Returns False if the slot is gone."""
     st = ctx.state
     cand = st.selected
     assert cand is not None
     if st.status != State.HOLDING:
-        ctx.move(State.HOLDING, "user_message", f"hold {cand.provider_id}")
+        ctx.move(State.HOLDING, trigger, f"hold {cand.provider_id}")
     try:
         held = ctx.tool(
             "hold_slot",
