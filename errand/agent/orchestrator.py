@@ -36,6 +36,7 @@ from errand.llm.base import LLMClient
 from errand.memory import commands as memory_cmd
 from errand.memory.context import ContextBuilder
 from errand.memory.store import MemoryStore
+from errand.memory.summary import summarize
 from errand.observability.trace import Tracer
 from errand.tools.gateway import RetriesExhausted, ToolGateway, Transport
 
@@ -258,7 +259,25 @@ class Agent:
         else:
             ctx.move(State.ABANDONED, "user_message", "declined approval")
 
+    def _refresh_summary(self, ctx: RunContext) -> None:
+        """Fold turns that aged out of the recent window into the rolling summary."""
+        st = ctx.state
+        turns = self.store.turns(ctx.user_id)
+        older = turns[: max(0, len(turns) - self.settings.recent_turns - 1)]
+        fresh = [t for t in older if t.turn_id > st.summary_upto_turn_id]
+        if len(fresh) < self.settings.summary_batch_turns:
+            return
+        text = summarize(
+            llm=self.llm, settings=self.settings, tracer=ctx.tracer, budget=ctx.budget,
+            previous=st.history_summary, turns=fresh,
+        )  # fmt: skip
+        if text is not None:
+            st.history_summary = text
+            st.summary_upto_turn_id = fresh[-1].turn_id
+            ctx.tracer.emit("summary.updated", upto_turn_id=st.summary_upto_turn_id)
+
     def _interpret(self, ctx: RunContext, text: str) -> NLUResult | None:
+        self._refresh_summary(ctx)
         memories, excluded = self.memory.select_for_context(ctx.user_id, ctx.state.request)
         built = self.context.build(
             system_prompt=SYSTEM_PROMPT,

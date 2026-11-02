@@ -90,6 +90,8 @@ class Settings(BaseSettings):
     context_budget_tokens: int = 3000
     token_safety_margin: float = Field(default=0.15, ge=0, lt=1)
     recent_turns: int = 6
+    # Re-summarise once this many turns have aged out of the recent window.
+    summary_batch_turns: int = 20
 
     # Untrusted text handling
     untrusted_max_chars: int = 500

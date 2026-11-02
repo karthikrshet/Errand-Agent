@@ -116,9 +116,9 @@ def write(rows: list[Row], elapsed: float) -> None:
     body = header + "\n".join(lines) + "\n"
     if failures:
         body += "\n## Failures\n" + "\n".join(failures) + "\n"
-    (ROOT / "RESULTS.md").write_text(body, encoding="utf-8")
+    (ROOT / "RESULTS.md").write_text(body, encoding="utf-8", newline="\n")
     with (ROOT / "results.csv").open("w", newline="", encoding="utf-8") as fh:
-        w = csv.writer(fh)
+        w = csv.writer(fh, lineterminator="\n")
         w.writerow(["scenario", "expected", "actual", "pass/fail", "notes"])
         for r in rows:
             w.writerow([f"{r.sid} {r.name}", r.expected, r.actual,

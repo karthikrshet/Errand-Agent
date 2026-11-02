@@ -109,38 +109,35 @@ def i3_verified_claims(run: EvalRun) -> list[str]:
 
 
 def i4_context(run: EvalRun) -> list[str]:
+    """Each model call is judged against memory statuses *at that moment*, replayed from the
+    trace's memory.status events (a value that was active then and corrected later is fine)."""
     problems = []
     limit = run.settings.effective_context_budget
-    bad_ids, bad_values = _forbidden_memories(run)
-    for e in run.tracer.of_kind("model.call"):
+    status: dict[str, str] = {}
+    forbidden = {"forgotten", "pending_confirmation", "superseded"}
+    for e in run.tracer.events:
+        changes = e.data.get("changes")
+        if e.kind == "memory.status" and isinstance(changes, dict):
+            status.update({str(k): str(v) for k, v in changes.items()})
         manifest = e.data.get("context_manifest")
-        if not isinstance(manifest, dict):
+        if e.kind != "model.call" or not isinstance(manifest, dict):
             continue
         total = manifest.get("total_tokens")
         if isinstance(total, int) and total > limit:
             problems.append(f"context {total} tokens > budget {limit}")
-        included = manifest.get("memory_ids_included") or []
-        if isinstance(included, list):
-            leaked = sorted(set(map(str, included)) & bad_ids)
-            if leaked:
-                problems.append(f"forbidden memories in context: {leaked}")
-    for req in run.llm.requests:
+        included = manifest.get("memory_ids_included")
+        ids = [str(x) for x in included] if isinstance(included, list) else []
+        leaked = sorted(x for x in ids if status.get(x) in forbidden)
+        if leaked:
+            problems.append(f"forbidden memories in context at seq {e.seq}: {leaked}")
+    for req in run.llm.requests[run.forget_from_request :]:
         prompt = req.system + "".join(m.content for m in req.messages)
         problems += [
-            f"forgotten value leaked into prompt: {v!r}" for v in bad_values if v in prompt
+            f"forgotten value leaked into prompt: {v!r}"
+            for v in run.forgotten_values
+            if v in prompt
         ]
     return problems
-
-
-def _forbidden_memories(run: EvalRun) -> tuple[set[str], set[str]]:
-    """IDs of memories that must never reach a prompt, plus raw values the user asked to forget."""
-    memory = getattr(run.world.agent, "memory", None)
-    ids: set[str] = set()
-    if memory is not None:
-        for m in memory.all_records(run.settings.user_id):
-            if m.status in ("forgotten", "pending_confirmation", "superseded"):
-                ids.add(m.memory_id)
-    return ids, set(run.forgotten_values)
 
 
 def i5_termination(run: EvalRun) -> list[str]:

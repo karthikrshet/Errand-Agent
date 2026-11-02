@@ -34,6 +34,10 @@ from errand.observability.trace import Tracer
 from errand.tools.scenarios import Scenario as WorldScenario
 
 SESSION = "eval"
+DEFAULT_SUMMARY = (
+    '{"facts": ["user has past electrician and plumber bookings", '
+    '"user works from home on Tuesdays"], "open_items": ["kitchen tap drips"]}'
+)
 Text = str | Callable[["EvalRun"], str]
 ModelOutput = str | Exception | Callable[[LLMRequest], str] | None
 
@@ -119,6 +123,9 @@ class EvalRun:
     current_model: ModelOutput = None
     # Raw values the simulated user asked to forget; I4 greps every prompt for them.
     forgotten_values: list[str] = field(default_factory=list)
+    forget_from_request: int = 0
+    # What the (tool-less) summariser returns; scenarios may make it gullible.
+    summary_output: str = DEFAULT_SUMMARY
 
     # --- convenience accessors used by checks ---
 
@@ -151,6 +158,8 @@ class EvalRun:
 
 def _handler(run_ref: list[EvalRun]) -> Callable[[LLMRequest], str]:
     def handler(request: LLMRequest) -> str:
+        if request.purpose == "history_summary":
+            return run_ref[0].summary_output
         output = run_ref[0].current_model
         if callable(output) and not isinstance(output, Exception):
             return output(request)

@@ -28,6 +28,11 @@ LABELS = {
 MORNING_BOOKINGS_TO_INFER = 3
 
 
+def _statuses(ctx: RunContext, changes: dict[str, str]) -> None:
+    """Trace every status change, so audits can replay what was allowed into each prompt."""
+    ctx.tracer.emit("memory.status", changes=changes)
+
+
 def _describe(m: MemoryRecord) -> str:
     label = LABELS.get(m.key, m.key.replace("_", " "))
     scope = f" ({r.service_name(m.service)})" if m.service else ""
@@ -73,6 +78,7 @@ def update(ctx: RunContext, op: MemoryOp) -> None:
     if pending is not None:
         ctx.memory.confirm(ctx.user_id, pending.memory_id, ctx.clock.now())
         ctx.tracer.emit("memory.write", op="confirm", id=pending.memory_id, key=pending.key)
+        _statuses(ctx, {pending.memory_id: "active"})
         ctx.say(f"Thanks, I'll remember that:\n{_describe(pending)}")
         return
     if op.value is None:
@@ -82,13 +88,16 @@ def update(ctx: RunContext, op: MemoryOp) -> None:
         ctx.user_id, op.key, op.value, memory_id=ctx.ids.new("m"), now=ctx.clock.now(),
         service=op.service, evidence=f"turn:{ctx.user_turn_id}",
     )  # fmt: skip
+    _statuses(ctx, _upsert_changes(rec))
     ctx.tracer.emit("memory.write", op="upsert", id=rec.memory_id, key=rec.key,
                     supersedes=rec.supersedes_id)  # fmt: skip
     ctx.say(f"Updated:\n{_describe(rec)}")
 
 
 def forget(ctx: RunContext, op: MemoryOp) -> None:
+    ids = [m.memory_id for m in ctx.memory.records(ctx.user_id) if m.key == op.key]
     values = ctx.memory.forget(ctx.user_id, op.key, ctx.clock.now())
+    _statuses(ctx, dict.fromkeys(ids, "forgotten"))
     scrubbed_turns = ctx.store.scrub_turns(ctx.user_id, values)
     summary = ctx.state.history_summary
     for v in values:
@@ -101,6 +110,13 @@ def forget(ctx: RunContext, op: MemoryOp) -> None:
         ctx.say(f"Done. I've forgotten your {label} and removed it from our history.")
     else:
         ctx.say(f"I didn't have a {label} stored.")
+
+
+def _upsert_changes(rec: MemoryRecord) -> dict[str, str]:
+    changes = {rec.memory_id: "active"}
+    if rec.supersedes_id:
+        changes[rec.supersedes_id] = "superseded"
+    return changes
 
 
 PATCH_TO_MEMORY = {
@@ -125,6 +141,7 @@ def remember_from_patch(ctx: RunContext, patch: SlotPatch, service: str | None) 
             service=scope, evidence=f"turn:{ctx.user_turn_id}",
         )  # fmt: skip
         ctx.tracer.emit("memory.write", op="remember", id=rec.memory_id, key=key)
+        _statuses(ctx, _upsert_changes(rec))
         stored.append(_describe(rec))
     if stored:
         ctx.say("I'll remember:\n" + "\n".join(stored))
@@ -186,6 +203,7 @@ def infer_preferences(ctx: RunContext) -> None:
         evidence=f"{hours['morning']} morning bookings",
     )  # fmt: skip
     if rec is not None:
+        _statuses(ctx, {rec.memory_id: "pending_confirmation"})
         ctx.tracer.emit("memory.write", op="infer", id=rec.memory_id, key=rec.key,
                         status=rec.status)  # fmt: skip
         ctx.say(

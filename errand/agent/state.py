@@ -141,6 +141,7 @@ class WorkflowState(BaseModel):
     replaces_booking_id: str | None = None
     asked_fields: list[str] = Field(default_factory=list)
     history_summary: str = ""
+    summary_upto_turn_id: int = 0
     counters: Counters = Field(default_factory=Counters)
     # Optimistic-concurrency token for the persisted session row.
     version: int = 0
@@ -164,6 +165,7 @@ class WorkflowState(BaseModel):
             session_id=self.session_id,
             user_id=self.user_id,
             history_summary=self.history_summary,
+            summary_upto_turn_id=self.summary_upto_turn_id,
             counters=self.counters,
             version=self.version,
         )
