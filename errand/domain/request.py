@@ -42,6 +42,8 @@ class ServiceRequest(BaseModel):
     latest_hour: int | None = Field(default=None, ge=0, le=23)
     budget_paise: int | None = Field(default=None, ge=0)
     preferred_provider_id: str | None = None
+    # From a saved preference: ranked higher, never used as a filter.
+    favored_provider_id: str | None = None
     blocked_provider_ids: list[str] = Field(default_factory=list)
     same_provider_as_last: bool = False
 

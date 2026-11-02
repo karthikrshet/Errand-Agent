@@ -21,6 +21,7 @@ from errand.tools.contracts import ProviderSummary
 
 W_RATING, W_PRICE, W_SOONEST = 0.5, 0.3, 0.2
 PREFERRED_BONUS = 1.0
+FAVORED_BONUS = 0.3
 MAX_OPTIONS = 3
 
 
@@ -117,6 +118,9 @@ def _candidate(
     if req.preferred_provider_id == p.provider_id:
         score += PREFERRED_BONUS
         reasons.append("the provider you asked for")
+    elif req.favored_provider_id == p.provider_id:
+        score += FAVORED_BONUS
+        reasons.append("your saved preferred provider")
     return Candidate(
         provider_id=p.provider_id,
         name=p.name,

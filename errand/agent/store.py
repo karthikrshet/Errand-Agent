@@ -188,18 +188,25 @@ class AgentStore:
         return [Turn(turn_id=r["turn_id"], role=r["role"], text=r["text"]) for r in reversed(rows)]
 
     def scrub_turns(self, user_id: str, values: list[str]) -> int:
-        """Remove forgotten values from stored conversation so they can't resurface in context."""
+        """Remove forgotten values from stored conversation (whole words only; see
+        memory/forgetting.py for why short and numeric values are not scrubbed)."""
+        from errand.memory.forgetting import scrub_text, scrubbable  # noqa: PLC0415
+
+        targets = scrubbable(values)
+        if not targets:
+            return 0
         changed = 0
         with transaction(self.conn):
-            for v in values:
-                if not v:
-                    continue
-                cur = self.conn.execute(
-                    "UPDATE turns SET text = replace(text, ?, '[forgotten]') "
-                    "WHERE user_id = ? AND instr(text, ?) > 0",
-                    (v, user_id, v),
-                )
-                changed += cur.rowcount
+            rows = self.conn.execute(
+                "SELECT turn_id, text FROM turns WHERE user_id = ?", (user_id,)
+            ).fetchall()
+            for row in rows:
+                new = scrub_text(row["text"], targets)
+                if new != row["text"]:
+                    self.conn.execute(
+                        "UPDATE turns SET text = ? WHERE turn_id = ?", (new, row["turn_id"])
+                    )
+                    changed += 1
         return changed
 
     # ------------------------------------------------------------------ approvals / grants

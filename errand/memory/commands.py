@@ -8,11 +8,14 @@ from collections import Counter
 from errand.agent import responses as r
 from errand.agent.nlu import MemoryOp
 from errand.agent.runtime import RunContext
+from errand.agent.store import StaleState
 from errand.domain.money import format_inr
 from errand.domain.request import FieldSource, SlotPatch
 from errand.domain.time import to_ist
+from errand.memory.forgetting import forget_in_state
 from errand.memory.store import MemoryRecord
 from errand.tools import contracts as c
+from errand.tools.catalog import BY_ID
 
 LABELS = {
     "preferred_area": "area",
@@ -95,21 +98,41 @@ def update(ctx: RunContext, op: MemoryOp) -> None:
 
 
 def forget(ctx: RunContext, op: MemoryOp) -> None:
+    """Forget a fact everywhere it can feed a prompt: memory rows, request fields filled from
+    it (in every session), rolling summaries, and stored conversation turns."""
     ids = [m.memory_id for m in ctx.memory.records(ctx.user_id) if m.key == op.key]
     values = ctx.memory.forget(ctx.user_id, op.key, ctx.clock.now())
     _statuses(ctx, dict.fromkeys(ids, "forgotten"))
+    cleared = forget_in_state(ctx.state, op.key, values)
+    other_sessions = _forget_in_other_sessions(ctx, op.key, values)
     scrubbed_turns = ctx.store.scrub_turns(ctx.user_id, values)
-    summary = ctx.state.history_summary
-    for v in values:
-        summary = summary.replace(v, "[forgotten]")
-    ctx.state.history_summary = summary
     ctx.tracer.emit("memory.forget", key=op.key, versions=len(values),
+                    request_fields_cleared=cleared, other_sessions=other_sessions,
                     turns_scrubbed=scrubbed_turns)  # fmt: skip
     label = LABELS.get(op.key, op.key.replace("_", " "))
     if values:
         ctx.say(f"Done. I've forgotten your {label} and removed it from our history.")
     else:
         ctx.say(f"I didn't have a {label} stored.")
+
+
+def _forget_in_other_sessions(ctx: RunContext, key: str, values: list[str]) -> int:
+    touched = 0
+    for sid in ctx.store.sessions_for(ctx.user_id):
+        if sid == ctx.state.session_id:
+            continue
+        state = ctx.store.load_state(sid)
+        if state is None:
+            continue
+        before = state.model_dump_json()
+        forget_in_state(state, key, values)
+        if state.model_dump_json() != before:
+            try:
+                ctx.store.save_state(state, ctx.clock.now())
+                touched += 1
+            except StaleState:
+                ctx.tracer.emit("memory.forget_retry_needed", session_id=sid)
+    return touched
 
 
 def _upsert_changes(rec: MemoryRecord) -> dict[str, str]:
@@ -173,18 +196,19 @@ def apply_defaults(ctx: RunContext) -> list[str]:
 
 
 def _as_request_fields(m: MemoryRecord) -> dict[str, object]:
+    """Translate an active memory into request fields (empty if it doesn't apply)."""
     v = m.value
-    if m.key == "preferred_area":
-        return {"area": v}
-    if m.key in ("earliest_hour", "latest_hour") and v.isdigit():
-        return {m.key: int(v)}
-    if m.key == "time_of_day" and v == "morning":
-        return {"earliest_hour": 8, "latest_hour": 12}
-    if m.key == "budget_ceiling" and v.isdigit():
-        return {"budget_paise": int(v) * 100}
-    if m.key == "blocked_provider":
-        return {"blocked_provider_ids": v}
-    return {}
+    numeric = v.isdigit()
+    table: dict[str, dict[str, object]] = {
+        "preferred_area": {"area": v},
+        "earliest_hour": {"earliest_hour": int(v)} if numeric else {},
+        "latest_hour": {"latest_hour": int(v)} if numeric else {},
+        "time_of_day": {"earliest_hour": 8, "latest_hour": 12} if v == "morning" else {},
+        "budget_ceiling": {"budget_paise": int(v) * 100} if numeric else {},
+        "blocked_provider": {"blocked_provider_ids": v},
+        "preferred_provider": {"favored_provider_id": v} if v in BY_ID else {},
+    }
+    return table.get(m.key, {})
 
 
 def infer_preferences(ctx: RunContext) -> None:
