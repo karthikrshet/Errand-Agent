@@ -66,3 +66,10 @@ Each entry: what broke, why, the fix, and the regression test that now guards it
 - **Why:** the watcher marked the cancellation *seen* the moment it notified, so deferring was equivalent to dropping it.
 - **Fix:** a mid-task detection is recorded as *notified* (told once) but not *seen*. The next tick after the user's workflow comes to rest runs the normal replacement flow, with fresh approval. The web app now runs a background watcher thread (`ERRAND_WATCH_INTERVAL_S`, default 15 s) whose messages reach the chat through an inbox, with no click needed.
 - **Regression tests:** eval `18b proactive_cancellation_while_user_busy`; `tests/test_web.py::test_background_watcher_delivers_without_any_click`.
+
+## 9. Any 400 from the provider silently disabled structured output (found on the first live run)
+
+- **What broke:** on the first real-API run, every call returned `400 invalid_request_error: This API key is not scoped to a workspace…`. The agent degraded safely (bounded retries, then the deterministic fallback; nothing was booked). But the adapter had also flipped `_schema_supported = False` and retried without the JSON schema, as if the provider had rejected our schema.
+- **Why:** the "schema not supported, retry with the schema in the prompt" fallback caught *every* `BadRequestError`. Auth, workspace or model-access errors would therefore permanently downgrade the client to unstructured output, hiding the real cause behind a second failure.
+- **Fix:** the fallback now only triggers when the 400 is about the schema/output format. Other 400s surface as `LLMError` with the provider's message. The adapter also supports `ANTHROPIC_WORKSPACE_ID` (sent as `anthropic-workspace-id`), which user-level keys require.
+- **Regression tests:** `tests/test_llm_adapters.py::test_non_schema_400_is_not_mistaken_for_schema_rejection`, `::test_workspace_id_is_sent_as_header`.

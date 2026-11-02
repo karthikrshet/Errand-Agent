@@ -38,10 +38,12 @@ def _response(text: str, stop: str = "end_turn") -> SimpleNamespace:
     )
 
 
-def _bad_request() -> anthropic.BadRequestError:
+def _bad_request(
+    message: str = "output_config.format: schema not supported",
+) -> anthropic.BadRequestError:
     request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
     return anthropic.BadRequestError(
-        "schema not supported", response=httpx2.Response(400, request=request), body=None
+        message, response=httpx2.Response(400, request=request), body=None
     )
 
 
@@ -108,3 +110,23 @@ def test_cassette_records_and_replays(tmp_path: Path) -> None:
     miss = REQ.model_copy(update={"metadata": {"user_text": "other"}})
     with pytest.raises(LLMError, match="no entry"):
         replay.complete(miss)
+
+
+def test_non_schema_400_is_not_mistaken_for_schema_rejection() -> None:
+    """Found on the first live run: a workspace error disabled structured output."""
+    workspace_error = _bad_request(
+        "This API key is not scoped to a workspace, so this request must include the "
+        "anthropic-workspace-id header"
+    )
+    client, sdk = _client([workspace_error])
+    with pytest.raises(LLMError, match="workspace"):
+        client.complete(REQ)
+    assert len(sdk.calls) == 1  # no silent retry without the schema
+    assert client._schema_supported is True
+
+
+def test_workspace_id_is_sent_as_header(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", "wrkspc_test")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    client = AnthropicClient(Settings())
+    assert client.client.default_headers.get("anthropic-workspace-id") == "wrkspc_test"

@@ -6,6 +6,9 @@ Design notes:
   trusts the provider to have validated anything.
 * If the provider rejects our schema (some JSON-schema constructs are unsupported), we fall back
   once to a plain request with the schema in the prompt, and remember that for this client.
+  Other 400s (auth, workspace, model access) are never mistaken for a schema problem.
+* `ANTHROPIC_WORKSPACE_ID`, if set, is sent as `anthropic-workspace-id` (needed for user-level
+  keys that are not scoped to a workspace).
 * Server-side refusal fallbacks are enabled by default (`fallbacks: "default"`).
 * Every provider failure is mapped to `LLMError`, which the NLU layer retries a bounded number
   of times before degrading to deterministic fallback handling.
@@ -16,6 +19,7 @@ Design notes:
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 import anthropic
@@ -30,9 +34,13 @@ class AnthropicClient:
     def __init__(self, settings: Settings, client: anthropic.Anthropic | None = None) -> None:
         self.model = settings.model
         self.settings = settings
+        # User-level keys (not scoped to a workspace) must name one on every request.
+        workspace = os.environ.get("ANTHROPIC_WORKSPACE_ID")
+        headers = {"anthropic-workspace-id": workspace} if workspace else None
         self.client = client or anthropic.Anthropic(
             timeout=settings.llm_timeout_s,
             max_retries=0,  # retries are ours, bounded + traced
+            default_headers=headers,
         )
         self._schema_supported = True
 
@@ -40,7 +48,7 @@ class AnthropicClient:
         try:
             return self._create(request, with_schema=self._schema_supported)
         except anthropic.BadRequestError as exc:
-            if request.json_schema is not None and self._schema_supported:
+            if request.json_schema is not None and self._schema_supported and _about_schema(exc):
                 self._schema_supported = False
                 return self._wrap(lambda: self._create(request, with_schema=False))
             raise LLMError(f"bad request: {exc.message}") from exc
@@ -87,3 +95,13 @@ class AnthropicClient:
             output_tokens=response.usage.output_tokens,
             provider_input_tokens=response.usage.input_tokens,
         )
+
+
+SCHEMA_ERROR_HINTS = ("schema", "output_config", "json_schema", "format")
+
+
+def _about_schema(exc: anthropic.BadRequestError) -> bool:
+    """Only a schema rejection justifies retrying without structured output; any other 400
+    (auth, workspace, model access) must surface instead of silently degrading."""
+    message = str(exc.message).lower()
+    return any(hint in message for hint in SCHEMA_ERROR_HINTS)
