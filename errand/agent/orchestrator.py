@@ -44,6 +44,9 @@ from errand.tools.gateway import RetriesExhausted, ToolGateway, Transport
 
 TracerFactory = Callable[[str], Tracer]
 LEASE_POLL_S = 0.02
+ACTIONABLE_ON_AMBIGUITY = frozenset(
+    {"request", "select_option", "cancel_booking", "reschedule_booking", "abort"}
+)
 MID_FLIGHT = frozenset({State.SEARCHING, State.HOLDING, State.EXECUTING, State.VERIFYING})
 
 
@@ -259,6 +262,9 @@ class Agent:
             st.reset_workflow()
         if st.pending_approval is not None and self._handle_confirmation(ctx, text):
             return
+        if st.pending_approval is None and st.candidates and _is_affirmation(text):
+            ctx.say(r.nothing_to_confirm(len(st.candidates)))
+            return
         result = self._interpret(ctx, text)
         if result is None:
             self._fallback(ctx, text)
@@ -275,8 +281,7 @@ class Agent:
             booking.execute(ctx)
             return True
         if decision == Decision.AMBIGUOUS:
-            ctx.say(r.ambiguous_confirmation())
-            reissue(ctx, "ambiguous reply")
+            self._on_ambiguous(ctx, text)
             return True
         if decision == Decision.CODE_MISMATCH:
             ctx.say(r.code_mismatch(req))
@@ -287,6 +292,18 @@ class Agent:
             self._after_reject(ctx)
             return True
         return False
+
+    def _on_ambiguous(self, ctx: RunContext, text: str) -> None:
+        """Never grant. If the reply asks for a change ("yes but 11am"), act on the change
+        (which ends in a new card); otherwise re-show the card with a fresh code."""
+        ctx.say(r.ambiguous_confirmation())
+        result = self._interpret(ctx, text)
+        if result is not None and result.intent in ACTIONABLE_ON_AMBIGUITY:
+            invalidate_pending(ctx, "ambiguous reply asked for a change")
+            ctx.tracer.emit("nlu.result", intent=result.intent, result=result)
+            self._dispatch(ctx, result)
+        else:
+            reissue(ctx, "ambiguous reply")
 
     def _after_reject(self, ctx: RunContext) -> None:
         st = ctx.state

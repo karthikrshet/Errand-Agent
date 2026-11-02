@@ -49,3 +49,15 @@ def test_i3_catches_unverified_success_claim(
     monkeypatch.setattr(booking, "_status", lying_status)
     run = execute(_scenario("11"), tmp_path / "r")
     assert any("not in ledger" in p for p in check_all(run)["I3"])
+
+
+def test_i7_catches_grant_minted_outside_awaiting_approval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-introduce BUGS.md #7 (stale card confirmable after a re-search) and expect I7."""
+    from errand.agent import runtime  # noqa: PLC0415
+
+    monkeypatch.setattr(runtime, "leaves_approval", lambda *_: False)
+    monkeypatch.setattr(booking, "_check_request", lambda *_: None)
+    run = execute(_scenario("09b"), tmp_path / "r")
+    assert any("minted in state" in p for p in check_all(run)["I7"])

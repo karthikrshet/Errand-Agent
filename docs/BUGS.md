@@ -48,3 +48,14 @@ Each entry: what broke, why, the fix, and the regression test that now guards it
   - A repair round that would exceed the budget falls back instead.
   - The review summariser keeps only the reviews that fit.
 - **Regression tests:** `tests/test_context_budget.py` (exact-count property over adversarial sizes) and eval `23b context_budget_oversized_message` under I4.
+
+## 7. A card the user had moved past could still be confirmed (found by independent review)
+
+- **What broke:** with an approval card showing, the user wrote "it's for the bathroom tap actually". That re-ran the search. Then "yes" minted a grant and opened an intent for the *old* card. The move to EXECUTING then failed with `IllegalTransition`, so the user saw "Something went wrong", and the next turn reported an "interrupted booking". Nothing was booked (the transition table stopped it), but a grant was consumed for a card the user was no longer looking at, and all six invariants passed.
+- **Why:** the approval was only invalidated when a *material* field changed (`job` isn't one). Leaving AWAITING_APPROVAL by any other route kept `pending_approval`, and the grant path didn't check which state the session was in.
+- **Fix:**
+  - `RunContext.move` invalidates the pending approval whenever the session leaves AWAITING_APPROVAL for anything other than EXECUTING. This is a single rule in one place.
+  - `booking._check_request` refuses to mint a grant unless the session is in AWAITING_APPROVAL.
+  - A bare "yes" with nothing to confirm now explains that.
+  - New invariant **I7**: every grant was minted while its session showed that approval.
+- **Regression tests:** eval `09b stale_approval_after_re_search`; `tests/test_invariants_have_teeth.py::test_i7_catches_grant_minted_outside_awaiting_approval` re-introduces the bug and expects I7 to fail.

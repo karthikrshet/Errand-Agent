@@ -33,6 +33,8 @@ def execute(ctx: RunContext) -> None:
     if req is None:
         raise ApprovalInvalid("no pending approval")
     _check_request(ctx, req)
+    if req.action in ("cancel", "reschedule") and not _target_still_active(ctx, req):
+        return
     opened = ctx.store.grant_and_open_intent(
         req,
         session_id=ctx.state.session_id,
@@ -47,6 +49,7 @@ def execute(ctx: RunContext) -> None:
     grant, intent = opened
     ctx.tracer.emit(
         "approval.granted",
+        session_id=ctx.state.session_id,
         request_id=req.request_id,
         grant_id=grant.grant_id,
         fingerprint=grant.fingerprint,
@@ -71,9 +74,27 @@ def execute(ctx: RunContext) -> None:
         _reschedule(ctx, intent)
 
 
+def _target_still_active(ctx: RunContext, req: ApprovalRequest) -> bool:
+    """Re-read the booking right before granting: the provider may have cancelled it since
+    the card was shown, and 'Cancelled and verified' must not describe someone else's act."""
+    out = ctx.tool("list_bookings", c.ListBookingsInput(user_id=ctx.user_id), c.ListBookingsOutput)
+    current = next((b for b in out.bookings if b.booking_id == req.booking_id), None)
+    if current is not None and current.status == "upcoming":
+        return True
+    status = current.status if current is not None else "not found"
+    ctx.tracer.emit("approval.rejected_at_execution", problems=[f"target booking {status}"])
+    ctx.state.pending_approval = None
+    ctx.invalidate(req, f"target booking {status}")
+    ctx.move(State.ABANDONED, "user_message", f"target booking {status}")
+    ctx.say(r.target_gone(req.booking_id or "", status.replace("_", " ")))
+    return False
+
+
 def _check_request(ctx: RunContext, req: ApprovalRequest) -> None:
     """The approval must match the exact call we would make: same user, same live hold."""
     problems = []
+    if ctx.state.status != State.AWAITING_APPROVAL:
+        problems.append(f"session is {ctx.state.status.value}, not awaiting approval")
     if req.user_id != ctx.user_id:
         problems.append("user mismatch")
     if req.action == "book":

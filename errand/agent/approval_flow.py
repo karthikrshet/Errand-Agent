@@ -67,14 +67,8 @@ def invalidate_pending(ctx: RunContext, reason: str) -> None:
     req = ctx.state.pending_approval
     if req is None:
         return
-    ctx.store.set_approval_status(req.request_id, "invalidated", reason)
     ctx.state.pending_approval = None
-    ctx.tracer.emit(
-        "approval.invalidated",
-        request_id=req.request_id,
-        fingerprint=req.fingerprint,
-        reason=reason,
-    )
+    ctx.invalidate(req, reason)
 
 
 def reissue(ctx: RunContext, reason: str) -> ApprovalRequest | None:

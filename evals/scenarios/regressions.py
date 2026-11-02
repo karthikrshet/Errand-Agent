@@ -6,9 +6,21 @@ Each one is the reviewer's reproduction, kept as a permanent eval.
 from __future__ import annotations
 
 from errand.agent.state import State
+from errand.domain.time import to_ist
 from errand.llm.script import nlu
-from evals.harness import Do, EvalRun, EvalScenario, Say
-from evals.scenarios.common import SUNDAY, TODAY, Checks, checks, final_state
+from errand.tools.scenarios import get_scenario
+from evals.harness import Do, EvalRun, EvalScenario, ProviderCancels, Say
+from evals.scenarios.common import (
+    SUNDAY,
+    TODAY,
+    YES,
+    Checks,
+    ask_plumber,
+    checks,
+    final_state,
+    pick,
+    pick_provider,
+)
 
 
 def _mark_forgot_koramangala(r: EvalRun) -> None:
@@ -76,4 +88,82 @@ LONG_MESSAGE_BUDGET = EvalScenario(
     _long_message,
 )
 
-SCENARIOS = [FORGET_AFTER_USE, LONG_MESSAGE_BUDGET]
+
+@checks
+def _stale_card(r: EvalRun, c: Checks) -> None:
+    c.that(r.replies[2].state.pending_approval is None, "re-search kept the old approval card")
+    c.that(not r.tracer.of_kind("approval.granted"), "a grant was minted for a card not shown")
+    c.that(not r.world.store.all_intents(), "an intent was opened")
+    c.that("nothing waiting for your confirmation" in r.last.text, "no guidance after 'yes'")
+    c.that(not r.tracer.of_kind("run.error"), "generic error surfaced")
+
+
+STALE_CARD = EvalScenario(
+    "09b",
+    "stale_approval_after_re_search",
+    "Card shown -> user changes a non-material detail (job) -> re-search -> 'yes' must not "
+    "confirm the card the user is no longer looking at",
+    [
+        ask_plumber(),
+        pick(1),
+        Say("it's for the bathroom tap actually", nlu("request", job="bathroom tap")),
+        YES,
+    ],
+    _stale_card,
+    get_scenario("happy_path"),
+)
+
+
+@checks
+def _target_gone(r: EvalRun, c: Checks) -> None:
+    c.that(not r.tool_calls("cancel"), "cancel was sent for a booking the provider already ended")
+    c.that(not r.tracer.of_kind("approval.granted"), "grant minted for a dead target")
+    c.that("no longer active" in r.last.text, "user not told why")
+    c.that("Cancelled and verified" not in r.last.text, "false success claim")
+
+
+TARGET_GONE = EvalScenario(
+    "17b",
+    "cancel_target_cancelled_by_provider_meanwhile",
+    "Cancel card shown -> provider cancels that booking -> 'yes' re-checks the booking, sends "
+    "no cancel and does not claim 'Cancelled and verified'",
+    [
+        Say("cancel my AC servicing", nlu("cancel_booking", booking_ref={"service": "ac_service"})),
+        ProviderCancels("b_up_ac01"),
+        YES,
+    ],
+    _target_gone,
+)
+
+
+@checks
+def _ambiguous_change(r: EvalRun, c: Checks) -> None:
+    second = r.replies[2].state.pending_approval
+    c.that(second is not None and to_ist(second.slot).hour == 11, "requested 11am not acted on")
+    c.that(len(r.tracer.of_kind("approval.granted")) == 1, "ambiguous reply granted")
+    c.that("haven't done anything" in r.replies[2].text, "ambiguity not explained")
+    rows = r.world.env.conn.execute(
+        "SELECT slot FROM bookings WHERE idempotency_key IS NOT NULL"
+    ).fetchall()
+    c.that(len(rows) == 1 and rows[0]["slot"].endswith("T11:00:00+05:30"), "not booked at 11")
+
+
+AMBIGUOUS_CHANGE = EvalScenario(
+    "33b",
+    "ambiguous_confirmation_with_change",
+    "'yes but make it 11am' never grants; the change is acted on (new hold, new card) and only "
+    "the next explicit 'yes' books the 11am slot",
+    [
+        ask_plumber(),
+        pick_provider("pl_aqua"),
+        Say(
+            "yes but make it 11am",
+            nlu("select_option", selection={"provider_id": "pl_aqua", "hour": 11}),
+        ),
+        YES,
+    ],
+    _ambiguous_change,
+    get_scenario("happy_path"),
+)
+
+SCENARIOS = [FORGET_AFTER_USE, LONG_MESSAGE_BUDGET, STALE_CARD, TARGET_GONE, AMBIGUOUS_CHANGE]

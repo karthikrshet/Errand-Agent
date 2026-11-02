@@ -140,6 +140,17 @@ def proactive_offer(name: str, reasons: Sequence[str], flagged: bool) -> str:
     )
 
 
+def nothing_to_confirm(options: int) -> str:
+    return (
+        "There's nothing waiting for your confirmation right now, so nothing was booked. "
+        f"Pick an option (1-{options}) and I'll show you exactly what I'd book."
+    )
+
+
+def target_gone(booking_id: str, status: str) -> str:
+    return f"Booking {booking_id} is no longer active ({status}), so I didn't change anything."
+
+
 def busy() -> str:
     return (
         "I'm still working on your previous message in this conversation. Nothing new was "
