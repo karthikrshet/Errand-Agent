@@ -122,7 +122,9 @@ CORRECTION = EvalScenario(
 
 @checks
 def _same_electrician(r: EvalRun, c: Checks) -> None:
-    opts = r.replies[0].state.candidates
+    c.that("which area" in r.replies[0].text, "did not ask for the missing area")
+    c.that("what service" not in r.replies[0].text, "re-asked the service")
+    opts = r.replies[1].state.candidates
     c.that(opts and all(o.provider_id == "el_ravi" for o in opts), "not the same electrician")
     c.that(all(to_ist(o.slot).hour >= 10 for o in opts), "slot before 10 a.m.")
     c.that(any(x.get("tool") == "list_bookings" for x in r.tool_calls()), "history not used")
@@ -136,8 +138,11 @@ def _same_electrician(r: EvalRun, c: Checks) -> None:
 SAME_ELECTRICIAN = EvalScenario(
     "05",
     "same_electrician_not_before_10",
-    "'Same electrician as last time, not before 10 a.m.' -> el_ravi from history, slots >= 10:00",
+    "Brief's exact sentence (no area given) -> asks only for the area -> el_ravi from history, "
+    "slots >= 10:00 -> approve -> booked",
     [
+        # The scripted output mirrors what the real model returned for this exact sentence:
+        # no area is invented (an earlier fixture did, and the real-LLM cassette caught it).
         Say(
             "Book the same electrician as last time, but not before 10 a.m., this week",
             nlu(
@@ -145,11 +150,11 @@ SAME_ELECTRICIAN = EvalScenario(
                 service="electrician",
                 same_provider_as_last=True,
                 earliest_hour=10,
-                area="Indiranagar",
                 date_start=TODAY,
                 date_end=SUNDAY,
             ),
         ),
+        Say("Indiranagar", nlu("request", area="Indiranagar")),
         pick(1),
         YES,
     ],

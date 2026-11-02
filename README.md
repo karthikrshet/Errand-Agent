@@ -147,9 +147,12 @@ The live adapter ([`errand/llm/anthropic_client.py`](errand/llm/anthropic_client
 - It falls back once to a schema-in-prompt request if the provider rejects the schema.
 - It maps every provider failure to `LLMError`. Bounded retries follow, then a deterministic degraded mode.
 
-`ANTHROPIC_API_KEY=... make record` records real-model cassettes for scenarios 01, 04 and 05
-into `evals/cassettes/`. `make eval` then replays them offline as extra `-rec` rows, using the
-same checks.
+`ANTHROPIC_API_KEY=... make record` records real-model cassettes into `evals/cassettes/`, and
+`make eval` replays them offline as extra `-rec` rows with the same checks and invariants.
+Committed recordings: scenarios **01** (full plumber booking) and **04** (reschedule) against
+`claude-opus-5-5`, both passing. Keys without a workspace scope also need
+`ANTHROPIC_WORKSPACE_ID`. The first live run found two real defects (BUGS #9 and a scripted
+fixture that invented an area the user never gave); both are fixed.
 
 ## Known limitations
 

@@ -40,7 +40,9 @@ def service_name(service: str | None) -> str:
 
 def ask_missing(fields: Sequence[str], service: str | None) -> str:
     asks = [FIELD_QUESTIONS[f] for f in fields if f in FIELD_QUESTIONS]
-    what = f"a {service_name(service)}" if service else "the right provider"
+    name = service_name(service)
+    article = "an" if name[:1].lower() in "aeiou" else "a"
+    what = f"{article} {name}" if service else "the right provider"
     if len(asks) == 1:
         return f"To find {what}, could you tell me {asks[0]}?"
     joined = ", ".join(asks[:-1]) + f" and {asks[-1]}"

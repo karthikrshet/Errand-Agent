@@ -1,0 +1,1 @@
+{"key": "nlu::Move my AC servicing to Saturday", "response": {"text": "{\"intent\":\"reschedule_booking\",\"patch\":{},\"booking_ref\":{\"service\":\"ac_service\",\"booking_id\":null},\"reschedule_to\":{\"date\":\"2026-11-07\",\"hour\":null},\"remember\":false}", "model": "claude-opus-5-5", "input_tokens": 2370, "output_tokens": 76, "provider_input_tokens": 2370}}

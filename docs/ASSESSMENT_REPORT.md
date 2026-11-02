@@ -31,13 +31,14 @@ The reviewer's weaknesses:
 | 1 | Major | A forgotten fact still reached the prompt via `request` fields in `<workflow_state>` | **Fixed** (BUGS #5) | reviewer repro re-run clean; eval `21b`; I4 |
 | 2 | Major | The "hard" context budget could be exceeded (3,944 > 2,550 tokens) | **Fixed** (BUGS #6) | repro now 1,249 tokens; property test over adversarial sizes; eval `23b` |
 | 3 | Major | A stale approval card stayed confirmable after a re-search; the grant was consumed | **Fixed** (BUGS #7) | repro re-run: no grant, no intent; eval `09b`; new invariant **I7** + mutation test |
-| 4 | Major | No evidence a real LLM was ever used | **Open** | needs the owner's API key: `make record` (see below) |
+| 4 | Major | No evidence a real LLM was ever used | **Mostly closed** | scenarios 01 and 04 recorded against `claude-opus-5-5` (real usage: 7,527/437 and 2,370/76 tokens); they replay offline as `01-rec`/`04-rec` and pass. Scenario 05 must be re-recorded after its fixture was corrected (next row) |
 | 5 | Major | A replacement promised mid-task was never delivered; the watcher was only a button | **Fixed** (BUGS #8) | eval `18b`; background watcher thread + web test with no click |
 | 6 | Minor | `forget` over-scrubbed ("1050 rupees" became "[forgotten]50") | **Fixed** (BUGS #5) | repro re-run; `tests/test_memory_forgetting.py` |
 | 7 | Minor | Eval blind spots: the forget path never applied to a request; I6 was tautological; all booking evals forced their outcomes | **Fixed** | eval `21b`; I6 now checks which run entered reserved states; eval `34` + a 40-seed test on the real 70/15/15 odds (hits success, `slot_taken` and both timeout paths) |
 | 7b | Minor | A saved technician preference never shaped the search | **Fixed** | it now ranks the provider higher (soft preference, never a filter) |
 | 8 | Minor | Cancel/reschedule did not re-check the target booking before acting | **Fixed** | eval `17b`: the provider cancels meanwhile; no cancel is sent and there is no false "Cancelled and verified" |
 | 9 | Minor | "yes but 11am" dropped the requested change | **Fixed** | eval `33b`: never grants, acts on the change, books 11:00 only after an explicit "yes" |
+| 11 | Major | The live run surfaced two more defects: (a) any 400 disabled structured output (BUGS #9); (b) the scripted fixture for scenario 05 *invented* an area the user never said, while the real model correctly left it empty and the agent asked for it | **Fixed** | adapter tests for non-schema 400s and workspace header; scenario 05 now follows the brief's exact sentence and asks for the area once |
 | 10 | Nit | Unused error types, a redundant `except`, a dead `None` check | **Fixed** | removed |
 | 10b | Nit | Trace JSONL keeps raw user text, including values later forgotten | **Accepted** | traces are operator logs, not model context; they would need their own retention policy |
 
@@ -56,7 +57,7 @@ The reviewer's weaknesses:
 | 20+ evals asserting outcomes and invariants | Met: 43 scenarios, 7 invariants, mutation-tested |
 | Proactive follow-up | Met (deferred path and background watcher added) |
 | Context management | Met (hard budget on the exact prompt) |
-| Real LLM drives the agent | **Open:** the adapter is built and offline-tested, but has not been run live |
+| Real LLM drives the agent | **Met:** recorded `claude-opus-5-5` runs of scenarios 01 and 04 pass under all invariants; 05 is pending re-record |
 | Design note, bugs, trace | Met: 8 real bugs, each with an existing regression test |
 | Demo video, AI transcripts | **Open:** the owner records and exports these |
 
@@ -68,9 +69,9 @@ The reviewer's weaknesses:
 
 ## What is still open, and how to close it
 
-1. **Real-LLM evidence (the most important gap).** With a key:
+1. **Re-record scenario 05** (its fixture changed). With a key:
    ```bash
-   ANTHROPIC_API_KEY=sk-ant-... uv run python tasks.py record   # scenarios 01, 04, 05
+   ANTHROPIC_API_KEY=sk-ant-... uv run python -m evals.record 05
    uv run python tasks.py eval                                   # adds offline "-rec" rows
    ```
    Commit `evals/cassettes/*.jsonl` and the regenerated `evals/RESULTS.md`. A live
