@@ -82,7 +82,12 @@ def summarize_reviews(
             summary = ReviewSummary.model_validate_json(response.text)
         except (LLMError, ValidationError) as exc:
             span.set(outcome="fallback", error=type(exc).__name__, context_manifest=manifest)
-            tracer.emit("llm.fallback", reason="review_summary_invalid", provider_id=provider_id)
+            reason = (
+                "review_summary_invalid"
+                if isinstance(exc, ValidationError)
+                else ("review_summary_unavailable")
+            )
+            tracer.emit("llm.fallback", reason=reason, provider_id=provider_id)
             return fallback_summary(reviews)
         span.set(
             outcome="ok",
