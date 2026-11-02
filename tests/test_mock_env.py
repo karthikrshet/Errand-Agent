@@ -77,7 +77,8 @@ def test_reviews_contain_every_injection_variant(make_env: EnvFactory) -> None:
     assert catalog.INJECTION_ROLE_SPOOF in texts
     assert catalog.INJECTION_FAKE_PRICE in texts
     zero_width = [t for t in texts if "\u200b" in t]
-    assert zero_width and "⁠" in zero_width[0]
+    assert zero_width
+    assert "⁠" in zero_width[0]
     assert env.get_provider("pl_trust").provider.name == catalog.INJECTED_PROVIDER_NAME
 
 
@@ -150,7 +151,8 @@ def test_timeout_after_success_is_booked_and_retry_returns_same_booking(
     assert status.status == "booked"
     assert env.get_booking_status(hold_id=hold_id).booking_id == status.booking_id
     retry = env.book(hold_id, "k1")
-    assert retry.outcome == "booked" and retry.booking_id == status.booking_id
+    assert retry.outcome == "booked"
+    assert retry.booking_id == status.booking_id
     assert env.count_bookings("k1") == 1
 
 
@@ -160,7 +162,8 @@ def test_timeout_not_booked_then_retry_same_key_books_once(make_env: EnvFactory)
     with pytest.raises(ToolTimeout):
         env.book(hold_id, "k1")
     status = env.get_booking_status(idempotency_key="k1")
-    assert status.status == "not_booked" and status.hold_expired is False
+    assert status.status == "not_booked"
+    assert status.hold_expired is False
     assert env.book(hold_id, "k1").outcome == "booked"
     assert env.count_bookings("k1") == 1
 
@@ -182,7 +185,8 @@ def test_hold_expired(make_env: EnvFactory, clock: FakeClock) -> None:
     clock.advance(601)
     assert env.book(hold_id, "k1").outcome == "hold_expired"
     status = env.get_booking_status(hold_id=hold_id)
-    assert status.status == "not_booked" and status.hold_expired is True
+    assert status.status == "not_booked"
+    assert status.hold_expired is True
 
 
 def test_idempotency_key_reuse_with_other_hold_conflicts(make_env: EnvFactory) -> None:
@@ -253,7 +257,8 @@ def test_reschedule_conflict_offers_alternatives(make_env: EnvFactory) -> None:
     env.scenario = Scenario(reschedule_conflict_slots=[conflict])
     out = env.reschedule("b_up_ac01", conflict, "r1")
     assert out.outcome == "slot_conflict"
-    assert out.alternative_slots and conflict not in out.alternative_slots
+    assert out.alternative_slots
+    assert conflict not in out.alternative_slots
     assert env.reschedule("b_up_ac01", conflict, "r1") == out
 
 
@@ -288,7 +293,8 @@ def test_provider_cancellation_emits_event(make_env: EnvFactory) -> None:
     env = make_env()
     env.simulate_provider_cancellation("b_up_ac01")
     events = env.pending_events()
-    assert events and events[0][1:] == ("provider_cancelled", "b_up_ac01")
+    assert events
+    assert events[0][1:] == ("provider_cancelled", "b_up_ac01")
     env.ack_event(events[0][0])
     assert env.pending_events() == []
     assert make_env(user_id="u_other").pending_events() == []
