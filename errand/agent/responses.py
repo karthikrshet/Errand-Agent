@@ -127,7 +127,7 @@ def provider_cancelled(provider: str, slot: datetime) -> str:
 
 
 def proactive_later() -> str:
-    return "Once you've finished what we're doing, say 'find a replacement' and I'll look."
+    return "I'll look for a replacement as soon as we've finished what we're doing now."
 
 
 def proactive_offer(name: str, reasons: Sequence[str], flagged: bool) -> str:

@@ -28,7 +28,7 @@ Each entry: what broke, why, the fix, and the regression test that now guards it
 - **What broke:** eval 27 became flaky (about 1 run in 20; 11/200 in a stress loop). In failing runs *nothing* was booked, the approval sat in `granted` with no intent behind it (so every later "yes" was refused), and some runs leaked a stack trace from a worker thread.
 - **Why:** three interacting problems. (a) Grants were issued in one transaction and consumed in another, so a grant could be left issued-but-unused. (b) With optimistic versioning, the *losing* process, which had nothing to do, often saved first; the winner, already holding a fresh grant, then hit `StaleState` and aborted, stranding the grant. (c) `move()` mutated the in-memory state before saving, and the error handlers themselves saved again, so a second `StaleState` escaped the top-level guard.
 - **Fix:** removed the classes of problem instead of patching interleavings: the grant is now minted, consumed and the PENDING intent written in **one** transaction (`AgentStore.grant_and_open_intent`), so a stranded grant cannot exist; turns on a session are serialised across processes by a DB **lease** (released in `finally`, TTL frees a crashed holder); version CAS stays as the backstop; `move()` is save-then-mutate and every handler is safe against `StaleState`. Booking correctness still never depends on the lease.
-- **Regression tests:** `tests/test_booking_safety.py::test_concurrent_double_confirmation_is_stable` (eval 27 thirty times per test run; a 300-iteration stress loop was clean) and `::test_concurrent_grant_consumption_has_one_winner` (8 threads race the atomic grant with no lease).
+- **Regression tests:** `tests/test_booking_safety.py::test_concurrent_double_confirmation_is_stable` (eval 27 fifteen times per test run; a 300-iteration stress loop was clean) and `::test_concurrent_grant_consumption_has_one_winner` (8 threads race the atomic grant with no lease).
 
 ## 5. A forgotten fact still reached the prompt through the live request (found by independent review)
 
@@ -59,3 +59,10 @@ Each entry: what broke, why, the fix, and the regression test that now guards it
   - A bare "yes" with nothing to confirm now explains that.
   - New invariant **I7**: every grant was minted while its session showed that approval.
 - **Regression tests:** eval `09b stale_approval_after_re_search`; `tests/test_invariants_have_teeth.py::test_i7_catches_grant_minted_outside_awaiting_approval` re-introduces the bug and expects I7 to fail.
+
+## 8. A replacement promised mid-task was never delivered (found by independent review)
+
+- **What broke:** a provider cancelled while the user was mid-booking. The watcher said "say 'find a replacement' and I'll look", but no intent handled that phrase, and later ticks skipped the booking. The replacement was never offered. The web "watcher" was also only a manual button.
+- **Why:** the watcher marked the cancellation *seen* the moment it notified, so deferring was equivalent to dropping it.
+- **Fix:** a mid-task detection is recorded as *notified* (told once) but not *seen*. The next tick after the user's workflow comes to rest runs the normal replacement flow, with fresh approval. The web app now runs a background watcher thread (`ERRAND_WATCH_INTERVAL_S`, default 15 s) whose messages reach the chat through an inbox, with no click needed.
+- **Regression tests:** eval `18b proactive_cancellation_while_user_busy`; `tests/test_web.py::test_background_watcher_delivers_without_any_click`.

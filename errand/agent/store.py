@@ -75,6 +75,12 @@ CREATE TABLE IF NOT EXISTS proactive_seen (
     seen_at TEXT NOT NULL,
     PRIMARY KEY (user_id, booking_id)
 );
+CREATE TABLE IF NOT EXISTS proactive_notified (
+    user_id TEXT NOT NULL,
+    booking_id TEXT NOT NULL,
+    notified_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, booking_id)
+);
 CREATE TABLE IF NOT EXISTS session_leases (
     session_id TEXT PRIMARY KEY,
     owner TEXT NOT NULL,
@@ -301,6 +307,14 @@ class AgentStore:
             "SELECT booking_id FROM proactive_seen WHERE user_id = ?", (user_id,)
         ).fetchall()
         return {str(r["booking_id"]) for r in rows}
+
+    def mark_proactive_notified(self, user_id: str, booking_id: str, now: datetime) -> bool:
+        """Record that the user was told (mid-task). True only the first time."""
+        cur = self.conn.execute(
+            "INSERT OR IGNORE INTO proactive_notified VALUES (?, ?, ?)",
+            (user_id, booking_id, now.isoformat()),
+        )
+        return cur.rowcount == 1
 
     def mark_proactive_seen(self, user_id: str, booking_id: str, now: datetime) -> None:
         self.conn.execute(

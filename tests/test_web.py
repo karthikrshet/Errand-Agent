@@ -13,7 +13,7 @@ from errand.web.app import create_app
 from tests.test_agent_flow import PLUMBER, SCRIPT
 
 
-def _client(tmp_path: Path) -> TestClient:
+def _client(tmp_path: Path, watch_interval_s: float = 0.0) -> TestClient:
     world = build_world(
         settings=Settings(),
         llm=ScriptedClient.from_map(SCRIPT),
@@ -22,7 +22,7 @@ def _client(tmp_path: Path) -> TestClient:
         db_path=tmp_path / "a.db",
         ledger_path=tmp_path / "l.db",
     )
-    return TestClient(create_app(world))
+    return TestClient(create_app(world, watch_interval_s=watch_interval_s))
 
 
 def test_chat_flow_over_http(tmp_path: Path) -> None:
@@ -54,3 +54,17 @@ def test_demo_script_keys_parse() -> None:
 
     for raw in demo_script(date(2026, 11, 3)).values():
         NLUResult.model_validate_json(raw)
+
+
+def test_background_watcher_delivers_without_any_click(tmp_path: Path) -> None:
+    import time  # noqa: PLC0415
+
+    c = _client(tmp_path, watch_interval_s=0.05)
+    c.post("/api/sessions/w/message", json={"text": "hello"})
+    c.post("/api/demo/provider-cancel", json={"booking_id": "b_up_ac01"})
+    messages: list[str] = []
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and not messages:
+        messages = c.get("/api/sessions/w/inbox").json()["messages"]
+        time.sleep(0.05)
+    assert any("cancelled your booking" in m for m in messages)

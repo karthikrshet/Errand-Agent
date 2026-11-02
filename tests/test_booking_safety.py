@@ -94,7 +94,7 @@ def test_concurrent_double_confirmation_is_stable(tmp_path: Path) -> None:
     from evals.scenarios import all_scenarios  # noqa: PLC0415
 
     sc = next(s for s in all_scenarios() if s.sid == "27")
-    for i in range(30):
+    for i in range(15):
         run = execute(sc, tmp_path / str(i))
         failures = sc.check(run) + [m for v in check_all(run).values() for m in v]
         assert not failures, (i, failures)

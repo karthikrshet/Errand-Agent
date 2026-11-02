@@ -12,6 +12,7 @@ import json
 import os
 import queue
 import threading
+import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
+from errand.agent import responses as r
 from errand.app import World, build_world
 from errand.clock import SystemClock
 from errand.config import Settings
@@ -64,6 +66,35 @@ class TraceHub:
             self._subs.remove(q)
 
 
+class BackgroundWatcher:
+    """Polls for provider cancellations (no user message involved) and queues what the
+    agent says for the chat UI to pick up."""
+
+    def __init__(self, world: World, sessions: set[str]) -> None:
+        self.world = world
+        self.sessions = sessions
+        self._inbox: dict[str, list[str]] = {}
+        self._lock = threading.Lock()
+
+    def start(self, interval_s: float) -> None:
+        threading.Thread(target=self._loop, args=(interval_s,), daemon=True).start()
+
+    def take(self, sid: str) -> list[str]:
+        with self._lock:
+            return self._inbox.pop(sid, [])
+
+    def _loop(self, interval_s: float) -> None:
+        idle_reply = r.status([])
+        while True:
+            time.sleep(interval_s)
+            for sid in list(self.sessions):
+                reply = self.world.agent.proactive_check(sid)
+                news = [m for m in reply.messages if m != idle_reply]
+                if news:
+                    with self._lock:
+                        self._inbox.setdefault(sid, []).extend(news)
+
+
 def _default_llm(settings: Settings) -> LLMClient:
     script = os.environ.get("ERRAND_SCRIPT")
     if script == "demo":
@@ -75,7 +106,12 @@ def _default_llm(settings: Settings) -> LLMClient:
     return AnthropicClient(settings)
 
 
-def create_app(world: World | None = None) -> FastAPI:
+def create_app(world: World | None = None, watch_interval_s: float | None = None) -> FastAPI:
+    """`watch_interval_s`: background proactive watcher period (0 disables). Defaults to
+    ERRAND_WATCH_INTERVAL_S (15 s) for the real app, and to 0 when a world is injected."""
+    if watch_interval_s is None:
+        env = float(os.environ.get("ERRAND_WATCH_INTERVAL_S", "15"))
+        watch_interval_s = env if world is None else 0.0
     if world is None:
         settings = Settings()
         world = build_world(
@@ -89,6 +125,9 @@ def create_app(world: World | None = None) -> FastAPI:
     world.tracer.listeners.append(hub.publish)
     started: set[str] = set()
     app = FastAPI(title="Errand Agent")
+    watcher = BackgroundWatcher(world, started)
+    if watch_interval_s > 0:
+        watcher.start(watch_interval_s)
 
     def ensure_started(sid: str) -> list[str]:
         if sid in started:
@@ -131,6 +170,11 @@ def create_app(world: World | None = None) -> FastAPI:
         boot = ensure_started(sid)
         reply = world.agent.proactive_check(sid)
         return reply_json(sid, [*boot, *reply.messages])
+
+    @app.get("/api/sessions/{sid}/inbox")
+    def poll_inbox(sid: str) -> dict[str, object]:
+        messages = watcher.take(sid)
+        return reply_json(sid, messages) if messages else {"messages": []}
 
     @app.post("/api/demo/provider-cancel")
     def provider_cancel(body: CancelIn) -> dict[str, str]:

@@ -91,8 +91,15 @@ document.getElementById("form").addEventListener("submit", e => {
 document.getElementById("watchBtn").onclick = () => post(`/api/sessions/${SID}/watch`);
 document.getElementById("cancelBtn").onclick = async () => {
   await fetch("/api/demo/provider-cancel", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({booking_id: "b_up_ac01"})});
-  add("(demo) provider cancelled booking b_up_ac01 - no user message sent; press 'Watcher tick'", false);
+  add("(demo) provider cancelled booking b_up_ac01 - no user message sent. The background watcher will notice within ~15 s (or press 'Watcher tick').", false);
 };
+
+setInterval(async () => {
+  const res = await fetch(`/api/sessions/${SID}/inbox`);
+  const data = await res.json();
+  (data.messages || []).forEach(m => add(m, false));
+  if (data.status) statusEl.textContent = data.status + (data.approval ? " · code " + data.approval.code : "");
+}, 3000);
 
 const KEYS = ["tool","from_state","to_state","trigger","reason","outcome","attempt","decision","confirm_code","grant_id","booking_id","idempotency_key","flags","channel","limit","purpose","input_tokens","latency_ms"];
 function summary(d) {

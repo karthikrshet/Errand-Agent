@@ -36,15 +36,20 @@ def check(ctx: RunContext) -> None:
     for b in out.bookings:
         if b.status != "cancelled_by_provider" or b.booking_id in seen:
             continue
-        ctx.store.mark_proactive_seen(ctx.user_id, b.booking_id, ctx.clock.now())
-        ctx.tracer.emit("proactive.detected", booking_id=b.booking_id, provider_id=b.provider_id)
         if b.slot <= ctx.clock.now():
+            ctx.store.mark_proactive_seen(ctx.user_id, b.booking_id, ctx.clock.now())
+            ctx.tracer.emit("proactive.detected", booking_id=b.booking_id)
             _decide(ctx, b, notify=False, reason="booking was in the past; nothing to replace")
             continue
         if ctx.state.status not in RESTING:
-            _decide(ctx, b, notify=True, reason="user is mid-task; notify only")
-            ctx.say(r.provider_cancelled(b.provider, b.slot) + " " + r.proactive_later())
+            # Defer, don't drop: tell the user once, keep it pending, replace when they're done.
+            if ctx.store.mark_proactive_notified(ctx.user_id, b.booking_id, ctx.clock.now()):
+                ctx.tracer.emit("proactive.detected", booking_id=b.booking_id)
+                _decide(ctx, b, notify=True, reason="user is mid-task; replacement deferred")
+                ctx.say(r.provider_cancelled(b.provider, b.slot) + " " + r.proactive_later())
             continue
+        ctx.store.mark_proactive_seen(ctx.user_id, b.booking_id, ctx.clock.now())
+        ctx.tracer.emit("proactive.detected", booking_id=b.booking_id, provider_id=b.provider_id)
         _decide(ctx, b, notify=True, reason="upcoming booking; looking for a replacement")
         _replace(ctx, b)
         return  # one replacement flow at a time

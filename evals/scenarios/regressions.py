@@ -9,7 +9,7 @@ from errand.agent.state import State
 from errand.domain.time import to_ist
 from errand.llm.script import nlu
 from errand.tools.scenarios import get_scenario
-from evals.harness import Do, EvalRun, EvalScenario, ProviderCancels, Say
+from evals.harness import Do, EvalRun, EvalScenario, ProactiveCheck, ProviderCancels, Say
 from evals.scenarios.common import (
     SUNDAY,
     TODAY,
@@ -166,4 +166,44 @@ AMBIGUOUS_CHANGE = EvalScenario(
     get_scenario("happy_path"),
 )
 
-SCENARIOS = [FORGET_AFTER_USE, LONG_MESSAGE_BUDGET, STALE_CARD, TARGET_GONE, AMBIGUOUS_CHANGE]
+
+@checks
+def _deferred(r: EvalRun, c: Checks) -> None:
+    told = r.replies[1]
+    c.that("cancelled your booking" in told.text, "user not told during the task")
+    c.that(told.state.status == State.PRESENTING_OPTIONS, "watcher hijacked the user's task")
+    c.that(r.replies[2].state.status == State.AWAITING_APPROVAL, "user's own task broken")
+    c.that(r.replies[3].state.status == State.COMPLETED, "user's booking not completed")
+    offer = r.replies[4]
+    c.that(offer.state.status == State.AWAITING_APPROVAL, "replacement never offered after task")
+    req = offer.state.pending_approval
+    c.that(req is not None and req.provider_id != "ac_cool", "re-offered the cancelling provider")
+    notices = [t for t in r.texts() if "cancelled your booking" in t]
+    c.that(len(notices) == 2, f"notified {len(notices)} times (expected: told, then offered)")
+
+
+DEFERRED_PROACTIVE = EvalScenario(
+    "18b",
+    "proactive_cancellation_while_user_busy",
+    "Provider cancels while the user is mid-booking -> told once, task not hijacked -> once the "
+    "user's booking completes, the next watcher tick offers a replacement for fresh approval",
+    [
+        ask_plumber(),
+        ProviderCancels("b_up_ac01"),
+        ProactiveCheck(),
+        pick(1),
+        YES,
+        ProactiveCheck(),
+    ],
+    _deferred,
+    get_scenario("happy_path"),
+)
+
+SCENARIOS = [
+    FORGET_AFTER_USE,
+    LONG_MESSAGE_BUDGET,
+    STALE_CARD,
+    TARGET_GONE,
+    AMBIGUOUS_CHANGE,
+    DEFERRED_PROACTIVE,
+]
