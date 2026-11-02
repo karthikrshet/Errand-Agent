@@ -61,7 +61,16 @@ TRANSITIONS: dict[State, frozenset[State]] = {
             S.AWAITING_APPROVAL,
         }
     ),
-    S.VERIFYING: frozenset({S.COMPLETED, S.EXECUTING, S.PRESENTING_OPTIONS, S.FAILED_SAFE}),
+    S.VERIFYING: frozenset(
+        {
+            S.COMPLETED,
+            S.EXECUTING,
+            S.PRESENTING_OPTIONS,
+            S.HOLDING,
+            S.AWAITING_APPROVAL,
+            S.FAILED_SAFE,
+        }
+    ),
     S.CANCEL_FLOW: frozenset({S.AWAITING_APPROVAL, S.GATHERING, S.FAILED_SAFE, S.ABANDONED}),
     S.RESCHEDULE_FLOW: frozenset(
         {S.AWAITING_APPROVAL, S.RESCHEDULE_FLOW, S.GATHERING, S.FAILED_SAFE, S.ABANDONED}
@@ -127,6 +136,8 @@ class WorkflowState(BaseModel):
     intent_id: str | None = None
     target_booking: TargetBooking | None = None
     new_slot: datetime | None = None
+    alternatives: list[datetime] = Field(default_factory=list)
+    notices: list[str] = Field(default_factory=list)
     replaces_booking_id: str | None = None
     asked_fields: list[str] = Field(default_factory=list)
     history_summary: str = ""

@@ -53,9 +53,9 @@ class Span:
     """Mutable bag of fields that a `with tracer.span(...)` block fills in before emitting."""
 
     def __init__(self) -> None:
-        self.data: dict[str, JsonValue] = {}
+        self.data: dict[str, object] = {}
 
-    def set(self, **fields: JsonValue) -> None:
+    def set(self, **fields: object) -> None:
         self.data.update(fields)
 
 
@@ -79,13 +79,13 @@ class Tracer:
             path.parent.mkdir(parents=True, exist_ok=True)
             self._fh = path.open("a", encoding="utf-8")
 
-    def emit(self, kind: str, **data: JsonValue) -> TraceEvent:
+    def emit(self, kind: str, **data: object) -> TraceEvent:
         event = TraceEvent(
             seq=len(self.events),
             ts=self.clock.now().isoformat(),
             run_id=self.run_id,
             kind=kind,
-            data={k: redact(v) for k, v in data.items()},
+            data={k: redact(to_json(v)) for k, v in data.items()},
         )
         self.events.append(event)
         self._account(event)
@@ -97,7 +97,7 @@ class Tracer:
         return event
 
     @contextmanager
-    def span(self, kind: str, **data: JsonValue) -> Iterator[Span]:
+    def span(self, kind: str, **data: object) -> Iterator[Span]:
         span = Span()
         span.set(**data)
         start = self._timer()
@@ -129,6 +129,14 @@ class Tracer:
             latency = d.get("latency_ms")
             if isinstance(latency, int | float):
                 self.totals.tool_latencies_ms.append(float(latency))
+
+
+def to_json(value: object) -> JsonValue:
+    """Normalise any value (models, datetimes, enums, tuples) to plain JSON."""
+    if isinstance(value, BaseModel):
+        value = value.model_dump(mode="json")
+    loaded: JsonValue = json.loads(json.dumps(value, default=str))
+    return loaded
 
 
 def _as_int(value: JsonValue) -> int:

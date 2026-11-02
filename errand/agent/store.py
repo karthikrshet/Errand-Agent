@@ -1,0 +1,339 @@
+"""Agent-side persistence (separate database from the provider's ledger).
+
+The guarantees that matter live in the schema, not in Python:
+* `grants.consumed_at` is set with a conditional UPDATE inside `BEGIN IMMEDIATE`, and the
+  intent row is created in the same transaction. Two concurrent confirmations therefore cannot
+  both proceed: exactly one sees `rowcount == 1`.
+* `booking_intents.idempotency_key` is UNIQUE, so a duplicate intent is impossible even if the
+  per-session lock were bypassed.
+* At most one *active* grant per fingerprint (partial unique index).
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from datetime import datetime
+from pathlib import Path
+from typing import Literal
+
+from pydantic import BaseModel
+
+from errand.agent.approval import ApprovalGrant, ApprovalRequest, idempotency_key_for
+from errand.agent.state import WorkflowState
+from errand.db import connect, transaction
+
+IntentStatus = Literal["PENDING", "SUCCEEDED", "FAILED"]
+ApprovalStatus = Literal["pending", "invalidated", "granted", "rejected"]
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sessions (
+    session_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    state TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS turns (
+    turn_id INTEGER PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    text TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS turns_by_session ON turns(session_id, turn_id);
+CREATE TABLE IF NOT EXISTS approvals (
+    request_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    fingerprint TEXT NOT NULL UNIQUE,
+    payload TEXT NOT NULL,
+    status TEXT NOT NULL,
+    reason TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS grants (
+    grant_id TEXT PRIMARY KEY,
+    request_id TEXT NOT NULL REFERENCES approvals(request_id),
+    fingerprint TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    source_turn_id INTEGER,
+    issued_at TEXT NOT NULL,
+    consumed_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS grants_one_active
+    ON grants(fingerprint) WHERE consumed_at IS NULL;
+CREATE TABLE IF NOT EXISTS booking_intents (
+    intent_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    approval_fingerprint TEXT NOT NULL,
+    grant_id TEXT NOT NULL REFERENCES grants(grant_id),
+    request TEXT NOT NULL,
+    status TEXT NOT NULL,
+    result TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+"""
+
+
+class BookingIntent(BaseModel):
+    intent_id: str
+    session_id: str
+    user_id: str
+    action: str
+    idempotency_key: str
+    approval_fingerprint: str
+    grant_id: str
+    request: ApprovalRequest
+    status: IntentStatus
+    result: dict[str, str] | None = None
+
+
+class Turn(BaseModel):
+    turn_id: int
+    role: Literal["user", "assistant"]
+    text: str
+
+
+class AgentStore:
+    def __init__(self, db: Path | str | sqlite3.Connection) -> None:
+        self.conn = db if isinstance(db, sqlite3.Connection) else connect(db)
+        self.conn.executescript(SCHEMA)
+
+    def next_boot(self) -> int:
+        """Increment and return the process boot counter (seeds the ID factory)."""
+        with transaction(self.conn):
+            self.conn.execute(
+                "INSERT INTO meta VALUES ('boot', 1) "
+                "ON CONFLICT(key) DO UPDATE SET value = value + 1"
+            )
+            row = self.conn.execute("SELECT value FROM meta WHERE key = 'boot'").fetchone()
+        return int(row["value"])
+
+    # ------------------------------------------------------------------ sessions / turns
+
+    def save_state(self, state: WorkflowState, now: datetime) -> None:
+        self.conn.execute(
+            "INSERT INTO sessions VALUES (?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET "
+            "state = excluded.state, updated_at = excluded.updated_at",
+            (state.session_id, state.user_id, state.model_dump_json(), now.isoformat()),
+        )
+
+    def load_state(self, session_id: str) -> WorkflowState | None:
+        row = self.conn.execute(
+            "SELECT state FROM sessions WHERE session_id = ?", (session_id,)
+        ).fetchone()
+        return None if row is None else WorkflowState.model_validate_json(row["state"])
+
+    def sessions_for(self, user_id: str) -> list[str]:
+        rows = self.conn.execute(
+            "SELECT session_id FROM sessions WHERE user_id = ? ORDER BY updated_at", (user_id,)
+        ).fetchall()
+        return [str(r["session_id"]) for r in rows]
+
+    def add_turn(self, session_id: str, user_id: str, role: str, text: str, now: datetime) -> int:
+        cur = self.conn.execute(
+            "INSERT INTO turns (session_id, user_id, role, text, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (session_id, user_id, role, text, now.isoformat()),
+        )
+        return int(cur.lastrowid or 0)
+
+    def turns(self, user_id: str, limit: int | None = None) -> list[Turn]:
+        """All turns for a user across sessions (oldest first); `limit` keeps the newest N."""
+        sql = "SELECT turn_id, role, text FROM turns WHERE user_id = ? ORDER BY turn_id DESC"
+        args: tuple[object, ...] = (user_id,)
+        if limit is not None:
+            sql += " LIMIT ?"
+            args = (user_id, limit)
+        rows = self.conn.execute(sql, args).fetchall()
+        return [Turn(turn_id=r["turn_id"], role=r["role"], text=r["text"]) for r in reversed(rows)]
+
+    # ------------------------------------------------------------------ approvals / grants
+
+    def save_approval(self, req: ApprovalRequest, session_id: str) -> None:
+        self.conn.execute(
+            "INSERT INTO approvals VALUES (?, ?, ?, ?, ?, 'pending', NULL, ?)",
+            (
+                req.request_id,
+                session_id,
+                req.user_id,
+                req.fingerprint,
+                req.model_dump_json(),
+                req.created_at.isoformat(),
+            ),
+        )
+
+    def set_approval_status(self, request_id: str, status: ApprovalStatus, reason: str) -> None:
+        self.conn.execute(
+            "UPDATE approvals SET status = ?, reason = ? WHERE request_id = ? "
+            "AND status = 'pending'",
+            (status, reason, request_id),
+        )
+
+    def approval_status(self, request_id: str) -> str | None:
+        row = self.conn.execute(
+            "SELECT status FROM approvals WHERE request_id = ?", (request_id,)
+        ).fetchone()
+        return None if row is None else str(row["status"])
+
+    def issue_grant(
+        self, req: ApprovalRequest, source_turn_id: int, now: datetime, grant_id: str
+    ) -> ApprovalGrant | None:
+        """Turn a *pending* approval into a grant. Returns None if it is no longer pending."""
+        grant = ApprovalGrant(
+            grant_id=grant_id,
+            request_id=req.request_id,
+            fingerprint=req.fingerprint,
+            user_id=req.user_id,
+            issued_at=now,
+        )
+        with transaction(self.conn):
+            cur = self.conn.execute(
+                "UPDATE approvals SET status = 'granted' WHERE request_id = ? "
+                "AND status = 'pending' AND fingerprint = ?",
+                (req.request_id, req.fingerprint),
+            )
+            if cur.rowcount != 1:
+                return None
+            self.conn.execute(
+                "INSERT INTO grants VALUES (?, ?, ?, ?, ?, ?, NULL)",
+                (
+                    grant.grant_id,
+                    grant.request_id,
+                    grant.fingerprint,
+                    grant.user_id,
+                    source_turn_id,
+                    now.isoformat(),
+                ),
+            )
+        return grant
+
+    def grant_for(self, request_id: str) -> ApprovalGrant | None:
+        row = self.conn.execute(
+            "SELECT * FROM grants WHERE request_id = ? ORDER BY issued_at DESC LIMIT 1",
+            (request_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return ApprovalGrant(
+            grant_id=row["grant_id"],
+            request_id=row["request_id"],
+            fingerprint=row["fingerprint"],
+            user_id=row["user_id"],
+            issued_at=datetime.fromisoformat(row["issued_at"]),
+        )
+
+    def consume_grant_and_create_intent(
+        self,
+        grant: ApprovalGrant,
+        req: ApprovalRequest,
+        session_id: str,
+        now: datetime,
+        intent_id: str,
+    ) -> BookingIntent | None:
+        """Single transaction: consume the grant (exactly once) and write the PENDING intent.
+
+        Returns None when the grant was already consumed, i.e. a duplicate confirmation; the
+        caller then looks up the existing intent instead of acting again.
+        """
+        key = idempotency_key_for(req.user_id, req.fingerprint)
+        intent = BookingIntent(
+            intent_id=intent_id,
+            session_id=session_id,
+            user_id=req.user_id,
+            action=req.action,
+            idempotency_key=key,
+            approval_fingerprint=req.fingerprint,
+            grant_id=grant.grant_id,
+            request=req,
+            status="PENDING",
+        )
+        with transaction(self.conn):
+            cur = self.conn.execute(
+                "UPDATE grants SET consumed_at = ? WHERE grant_id = ? AND consumed_at IS NULL "
+                "AND fingerprint = ? AND user_id = ?",
+                (now.isoformat(), grant.grant_id, req.fingerprint, req.user_id),
+            )
+            if cur.rowcount != 1:
+                return None
+            self.conn.execute(
+                "INSERT INTO booking_intents VALUES "
+                "(?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', NULL, ?, ?)",
+                (
+                    intent.intent_id,
+                    session_id,
+                    intent.user_id,
+                    intent.action,
+                    key,
+                    req.fingerprint,
+                    grant.grant_id,
+                    req.model_dump_json(),
+                    now.isoformat(),
+                    now.isoformat(),
+                ),
+            )
+        return intent
+
+    # ------------------------------------------------------------------ intents
+
+    def set_intent(
+        self, intent_id: str, status: IntentStatus, result: dict[str, str], now: datetime
+    ) -> None:
+        self.conn.execute(
+            "UPDATE booking_intents SET status = ?, result = ?, updated_at = ? WHERE intent_id = ?",
+            (status, json.dumps(result), now.isoformat(), intent_id),
+        )
+
+    def intent_by_key(self, key: str) -> BookingIntent | None:
+        row = self.conn.execute(
+            "SELECT * FROM booking_intents WHERE idempotency_key = ?", (key,)
+        ).fetchone()
+        return None if row is None else _intent(row)
+
+    def intent(self, intent_id: str) -> BookingIntent | None:
+        row = self.conn.execute(
+            "SELECT * FROM booking_intents WHERE intent_id = ?", (intent_id,)
+        ).fetchone()
+        return None if row is None else _intent(row)
+
+    def pending_intents(self, user_id: str) -> list[BookingIntent]:
+        rows = self.conn.execute(
+            "SELECT * FROM booking_intents WHERE user_id = ? AND status = 'PENDING' "
+            "ORDER BY created_at",
+            (user_id,),
+        ).fetchall()
+        return [_intent(r) for r in rows]
+
+    def all_intents(self) -> list[BookingIntent]:
+        rows = self.conn.execute("SELECT * FROM booking_intents ORDER BY created_at").fetchall()
+        return [_intent(r) for r in rows]
+
+    def consumed_grant_fingerprints(self) -> set[str]:
+        rows = self.conn.execute(
+            "SELECT fingerprint FROM grants WHERE consumed_at IS NOT NULL"
+        ).fetchall()
+        return {str(r["fingerprint"]) for r in rows}
+
+
+def _intent(row: sqlite3.Row) -> BookingIntent:
+    return BookingIntent(
+        intent_id=row["intent_id"],
+        session_id=row["session_id"],
+        user_id=row["user_id"],
+        action=row["action"],
+        idempotency_key=row["idempotency_key"],
+        approval_fingerprint=row["approval_fingerprint"],
+        grant_id=row["grant_id"],
+        request=ApprovalRequest.model_validate_json(row["request"]),
+        status=row["status"],
+        result=None if row["result"] is None else json.loads(row["result"]),
+    )
