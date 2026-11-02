@@ -17,6 +17,7 @@ from collections.abc import Sequence
 
 from pydantic import BaseModel, Field
 
+from errand.agent.review_summarizer import render_for_model
 from errand.agent.state import WorkflowState
 from errand.agent.store import Turn
 from errand.domain.money import format_inr
@@ -70,6 +71,11 @@ def render_state(state: WorkflowState) -> str:
             for i, c in enumerate(state.candidates, 1)
         )
         lines.append(f"options shown: {opts}")
+        lines.extend(
+            render_for_model(c.provider_id, c.review_summary)
+            for c in state.candidates
+            if c.review_summary is not None
+        )
     if state.target_booking is not None:
         t = state.target_booking
         lines.append(f"target booking: {t.booking_id} {t.service} {t.slot.isoformat()}")

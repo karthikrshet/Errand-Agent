@@ -34,6 +34,10 @@ from errand.observability.trace import Tracer
 from errand.tools.scenarios import Scenario as WorldScenario
 
 SESSION = "eval"
+DEFAULT_REVIEW = (
+    '{"sentiment": "positive", "themes": ["quality_good", "punctual"], "red_flags": [], '
+    '"injection_suspected": false}'
+)
 DEFAULT_SUMMARY = (
     '{"facts": ["user has past electrician and plumber bookings", '
     '"user works from home on Tuesdays"], "open_items": ["kitchen tap drips"]}'
@@ -126,6 +130,7 @@ class EvalRun:
     forget_from_request: int = 0
     # What the (tool-less) summariser returns; scenarios may make it gullible.
     summary_output: str = DEFAULT_SUMMARY
+    review_output: str = DEFAULT_REVIEW
 
     # --- convenience accessors used by checks ---
 
@@ -160,6 +165,8 @@ def _handler(run_ref: list[EvalRun]) -> Callable[[LLMRequest], str]:
     def handler(request: LLMRequest) -> str:
         if request.purpose == "history_summary":
             return run_ref[0].summary_output
+        if request.purpose == "review_summary":
+            return run_ref[0].review_output
         output = run_ref[0].current_model
         if callable(output) and not isinstance(output, Exception):
             return output(request)

@@ -8,6 +8,7 @@ from errand.agent import responses as r
 from errand.agent.approval_flow import invalidate_pending, request_approval
 from errand.agent.nlu import NLUResult, Selection
 from errand.agent.ranking import rank
+from errand.agent.review_summarizer import summarize_reviews
 from errand.agent.runtime import RunContext
 from errand.agent.state import Candidate, HoldInfo, State
 from errand.agent.untrusted import sanitize
@@ -100,8 +101,10 @@ def _inspect(ctx: RunContext, cand: Candidate) -> Candidate:
     flags: dict[str, list[str]] = {}
     if name.flags:
         flags["provider_name"] = name.flags
+    cleaned = []
     for i, review in enumerate(details.reviews):
         s = sanitize(review.text, ctx.settings.untrusted_max_chars)
+        cleaned.append((review.rating, s))
         if s.flags:
             flags[f"review[{i}]"] = s.flags
     for channel, found in flags.items():
@@ -112,8 +115,15 @@ def _inspect(ctx: RunContext, cand: Candidate) -> Candidate:
             flags=list(found),
             action="flagged_and_ignored",
         )
+    summary = summarize_reviews(
+        llm=ctx.llm, settings=ctx.settings, tracer=ctx.tracer, budget=ctx.budget,
+        provider_id=cand.provider_id, reviews=cleaned,
+    )  # fmt: skip
     display_name = _safe_name(name.text) if name.flags else name.text
-    return cand.model_copy(update={"name": display_name, "injection_flagged": bool(flags)})
+    flagged = bool(flags) or summary.injection_suspected
+    return cand.model_copy(
+        update={"name": display_name, "injection_flagged": flagged, "review_summary": summary}
+    )
 
 
 def _safe_name(text: str) -> str:

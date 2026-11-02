@@ -18,6 +18,7 @@ from errand.agent.store import AgentStore
 from errand.clock import Clock
 from errand.config import Settings
 from errand.ids import IdFactory
+from errand.llm.base import LLMClient
 from errand.memory.store import MemoryStore
 from errand.observability.trace import Tracer
 from errand.tools.gateway import ToolGateway
@@ -37,6 +38,7 @@ class RunContext:
     crash: CrashHooks
     ids: IdFactory
     memory: MemoryStore
+    llm: LLMClient
     user_turn_id: int | None = None
     replies: list[str] = field(default_factory=list)
 
@@ -45,7 +47,13 @@ class RunContext:
         return self.state.user_id
 
     def move(self, to: State, trigger: Trigger, reason: str = "") -> None:
-        before, after = self.state.transition(to, trigger)
+        """Validate, persist, then adopt. If persisting fails (StaleState), the in-memory
+        state is left untouched, so error handling never sees a half-applied transition."""
+        candidate = self.state.model_copy(deep=True)
+        before, after = candidate.transition(to, trigger)
+        self.store.save_state(candidate, self.clock.now())
+        self.state.status = candidate.status
+        self.state.version = candidate.version
         self.tracer.emit(
             "state.transition",
             from_state=before.value,
@@ -53,7 +61,6 @@ class RunContext:
             trigger=trigger,
             reason=reason,
         )
-        self.save()
 
     def say(self, text: str) -> None:
         self.replies.append(text)

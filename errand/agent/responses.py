@@ -63,6 +63,10 @@ def options_intro(service: str | None, count: int) -> str:
 def option_line(n: int, cand: Candidate) -> str:
     badge = "  [!] suspicious review content ignored" if cand.injection_flagged else ""
     why = "; ".join(cand.reasons)
+    rs = cand.review_summary
+    if rs is not None:
+        notes = ", ".join(t.replace("_", " ") for t in rs.themes) or "no clear themes"
+        why += f"; reviews: {rs.sentiment} ({notes})"
     return (
         f"{n}. {cand.name} - {when(cand.slot)} - {format_inr(cand.price_paise)} - "
         f"{cand.rating:.1f}/5{badge}\n   Why: {why}"
@@ -118,8 +122,11 @@ def code_mismatch(req: ApprovalRequest) -> str:
     )
 
 
-def already_confirmed() -> str:
-    return "That confirmation was already received and is being handled, so nothing new was done."
+def busy() -> str:
+    return (
+        "I'm still working on your previous message in this conversation. Nothing new was "
+        "done; please send that again in a moment."
+    )
 
 
 def already_done(booking_id: str | None) -> str:

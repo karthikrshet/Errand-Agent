@@ -56,13 +56,11 @@ def test_repeated_yes_books_exactly_once(tmp_path: Path) -> None:
 
 
 def test_concurrent_grant_consumption_has_one_winner(tmp_path: Path) -> None:
+    """The DB alone (no session lease) lets exactly one of 8 racing confirmations through."""
     w = _world(tmp_path, get_scenario("happy_path"))
     _to_approval(w)
-    st = w.agent.load("s1")
-    req = st.pending_approval
+    req = w.agent.load("s1").pending_approval
     assert req is not None
-    grant = w.store.issue_grant(req, 1, w.clock.now(), "g_race")
-    assert grant is not None
     results: list[object] = []
     barrier = threading.Barrier(8)
 
@@ -70,7 +68,14 @@ def test_concurrent_grant_consumption_has_one_winner(tmp_path: Path) -> None:
         store = AgentStore(tmp_path / "agent.db")  # own connection, like another process
         barrier.wait()
         results.append(
-            store.consume_grant_and_create_intent(grant, req, "s1", w.clock.now(), f"i_{i}")
+            store.grant_and_open_intent(
+                req,
+                session_id="s1",
+                source_turn_id=1,
+                now=w.clock.now(),
+                grant_id=f"g_{i}",
+                intent_id=f"i_{i}",
+            )
         )
 
     threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
@@ -78,9 +83,21 @@ def test_concurrent_grant_consumption_has_one_winner(tmp_path: Path) -> None:
         t.start()
     for t in threads:
         t.join()
-    winners = [x for x in results if x is not None]
-    assert len(winners) == 1
+    assert len([x for x in results if x is not None]) == 1
     assert len(w.store.all_intents()) == 1
+
+
+def test_concurrent_double_confirmation_is_stable(tmp_path: Path) -> None:
+    """Regression for BUGS.md #4: two processes confirming at once, many times over."""
+    from evals.harness import execute  # noqa: PLC0415
+    from evals.invariants import check_all  # noqa: PLC0415
+    from evals.scenarios import all_scenarios  # noqa: PLC0415
+
+    sc = next(s for s in all_scenarios() if s.sid == "27")
+    for i in range(30):
+        run = execute(sc, tmp_path / str(i))
+        failures = sc.check(run) + [m for v in check_all(run).values() for m in v]
+        assert not failures, (i, failures)
 
 
 def test_grant_is_refused_if_hold_changed_after_approval(tmp_path: Path) -> None:

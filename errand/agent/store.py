@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -69,6 +69,11 @@ CREATE TABLE IF NOT EXISTS grants (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS grants_one_active
     ON grants(fingerprint) WHERE consumed_at IS NULL;
+CREATE TABLE IF NOT EXISTS session_leases (
+    session_id TEXT PRIMARY KEY,
+    owner TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS booking_intents (
     intent_id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
@@ -219,10 +224,24 @@ class AgentStore:
         ).fetchone()
         return None if row is None else str(row["status"])
 
-    def issue_grant(
-        self, req: ApprovalRequest, source_turn_id: int, now: datetime, grant_id: str
-    ) -> ApprovalGrant | None:
-        """Turn a *pending* approval into a grant. Returns None if it is no longer pending."""
+    def grant_and_open_intent(
+        self,
+        req: ApprovalRequest,
+        *,
+        session_id: str,
+        source_turn_id: int,
+        now: datetime,
+        grant_id: str,
+        intent_id: str,
+    ) -> tuple[ApprovalGrant, BookingIntent] | None:
+        """ONE transaction: pending approval -> granted, grant recorded as consumed, PENDING
+        intent written. Returns None if the approval is no longer pending (a duplicate or
+        concurrent confirmation, or an invalidated request), so it can never act twice.
+
+        Issuing and consuming atomically means a grant can never be left issued-but-unused by
+        a crash or a lost race (docs/BUGS.md #4).
+        """
+        key = idempotency_key_for(req.user_id, req.fingerprint)
         grant = ApprovalGrant(
             grant_id=grant_id,
             request_id=req.request_id,
@@ -230,56 +249,6 @@ class AgentStore:
             user_id=req.user_id,
             issued_at=now,
         )
-        with transaction(self.conn):
-            cur = self.conn.execute(
-                "UPDATE approvals SET status = 'granted' WHERE request_id = ? "
-                "AND status = 'pending' AND fingerprint = ?",
-                (req.request_id, req.fingerprint),
-            )
-            if cur.rowcount != 1:
-                return None
-            self.conn.execute(
-                "INSERT INTO grants VALUES (?, ?, ?, ?, ?, ?, NULL)",
-                (
-                    grant.grant_id,
-                    grant.request_id,
-                    grant.fingerprint,
-                    grant.user_id,
-                    source_turn_id,
-                    now.isoformat(),
-                ),
-            )
-        return grant
-
-    def grant_for(self, request_id: str) -> ApprovalGrant | None:
-        row = self.conn.execute(
-            "SELECT * FROM grants WHERE request_id = ? ORDER BY issued_at DESC LIMIT 1",
-            (request_id,),
-        ).fetchone()
-        if row is None:
-            return None
-        return ApprovalGrant(
-            grant_id=row["grant_id"],
-            request_id=row["request_id"],
-            fingerprint=row["fingerprint"],
-            user_id=row["user_id"],
-            issued_at=datetime.fromisoformat(row["issued_at"]),
-        )
-
-    def consume_grant_and_create_intent(
-        self,
-        grant: ApprovalGrant,
-        req: ApprovalRequest,
-        session_id: str,
-        now: datetime,
-        intent_id: str,
-    ) -> BookingIntent | None:
-        """Single transaction: consume the grant (exactly once) and write the PENDING intent.
-
-        Returns None when the grant was already consumed, i.e. a duplicate confirmation; the
-        caller then looks up the existing intent instead of acting again.
-        """
-        key = idempotency_key_for(req.user_id, req.fingerprint)
         intent = BookingIntent(
             intent_id=intent_id,
             session_id=session_id,
@@ -287,35 +256,55 @@ class AgentStore:
             action=req.action,
             idempotency_key=key,
             approval_fingerprint=req.fingerprint,
-            grant_id=grant.grant_id,
+            grant_id=grant_id,
             request=req,
             status="PENDING",
         )
         with transaction(self.conn):
             cur = self.conn.execute(
-                "UPDATE grants SET consumed_at = ? WHERE grant_id = ? AND consumed_at IS NULL "
-                "AND fingerprint = ? AND user_id = ?",
-                (now.isoformat(), grant.grant_id, req.fingerprint, req.user_id),
+                "UPDATE approvals SET status = 'granted' WHERE request_id = ? "
+                "AND status = 'pending' AND fingerprint = ? AND user_id = ?",
+                (req.request_id, req.fingerprint, req.user_id),
             )
             if cur.rowcount != 1:
                 return None
             self.conn.execute(
+                "INSERT INTO grants VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (grant_id, req.request_id, req.fingerprint, req.user_id, source_turn_id,
+                 now.isoformat(), now.isoformat()),
+            )  # fmt: skip
+            self.conn.execute(
                 "INSERT INTO booking_intents VALUES "
                 "(?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', NULL, ?, ?)",
-                (
-                    intent.intent_id,
-                    session_id,
-                    intent.user_id,
-                    intent.action,
-                    key,
-                    req.fingerprint,
-                    grant.grant_id,
-                    req.model_dump_json(),
-                    now.isoformat(),
-                    now.isoformat(),
-                ),
+                (intent_id, session_id, req.user_id, req.action, key, req.fingerprint,
+                 grant_id, req.model_dump_json(), now.isoformat(), now.isoformat()),
+            )  # fmt: skip
+        return grant, intent
+
+    # ------------------------------------------------------------------ session lease
+
+    def acquire_lease(self, session_id: str, owner: str, now: datetime, ttl_s: float) -> bool:
+        """Serialise turns on one session across processes. Expired leases can be taken over
+        (that is how a crashed holder is recovered); correctness never depends on this."""
+        expires = (now + timedelta(seconds=ttl_s)).isoformat()
+        with transaction(self.conn):
+            row = self.conn.execute(
+                "SELECT owner, expires_at FROM session_leases WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            if row is not None and row["owner"] != owner and row["expires_at"] > now.isoformat():
+                return False
+            self.conn.execute(
+                "INSERT INTO session_leases VALUES (?, ?, ?) ON CONFLICT(session_id) DO UPDATE "
+                "SET owner = excluded.owner, expires_at = excluded.expires_at",
+                (session_id, owner, expires),
             )
-        return intent
+        return True
+
+    def release_lease(self, session_id: str, owner: str) -> None:
+        self.conn.execute(
+            "DELETE FROM session_leases WHERE session_id = ? AND owner = ?", (session_id, owner)
+        )
 
     # ------------------------------------------------------------------ intents
 

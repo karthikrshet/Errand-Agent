@@ -12,13 +12,14 @@ from __future__ import annotations
 
 import random
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from errand.agent import booking, manage_flow, search_flow
 from errand.agent import responses as r
 from errand.agent.approval import Decision, classify_confirmation
-from errand.agent.approval_flow import grant_from_user_message, invalidate_pending, reissue
+from errand.agent.approval_flow import classify_reply, invalidate_pending, reissue
 from errand.agent.crash import CrashHooks
 from errand.agent.limits import RunBudget
 from errand.agent.nlu import NLU, SYSTEM_PROMPT, BookingRef, NLUResult
@@ -41,6 +42,7 @@ from errand.observability.trace import Tracer
 from errand.tools.gateway import RetriesExhausted, ToolGateway, Transport
 
 TracerFactory = Callable[[str], Tracer]
+LEASE_POLL_S = 0.02
 MID_FLIGHT = frozenset({State.SEARCHING, State.HOLDING, State.EXECUTING, State.VERIFYING})
 
 
@@ -64,6 +66,7 @@ class Agent:
         memory: MemoryStore,
         rng: random.Random | None = None,
         crash: CrashHooks | None = None,
+        wait: Callable[[float], None] = time.sleep,
     ) -> None:
         self.memory = memory
         self.settings = settings
@@ -78,19 +81,41 @@ class Agent:
         self.context = ContextBuilder(
             settings.context_budget_tokens, settings.effective_context_budget
         )
+        self.wait = wait
         self._locks: dict[str, threading.Lock] = {}
         self._locks_guard = threading.Lock()
 
     # ------------------------------------------------------------------ public API
 
     def handle_message(self, session_id: str, text: str) -> Reply:
-        with self._lock(session_id):
-            return self._run(session_id, text)
+        return self._serialised(session_id, text)
 
     def startup(self, session_id: str) -> Reply:
         """Process (re)start: reconcile before accepting any new user input."""
+        return self._serialised(session_id, None)
+
+    def _serialised(self, session_id: str, text: str | None) -> Reply:
+        """One turn at a time per session: in-process lock + a DB lease across processes.
+        Booking correctness never depends on this (DB constraints are the real guard)."""
+        owner = self.ids.new("lease")
         with self._lock(session_id):
-            return self._run(session_id, None)
+            waited = 0.0
+            while not self.store.acquire_lease(
+                session_id, owner, self.clock.now(), self.settings.session_lease_ttl_s
+            ):
+                if waited >= self.settings.session_lease_wait_s:
+                    return self._busy(session_id)
+                self.wait(LEASE_POLL_S)
+                waited += LEASE_POLL_S
+            try:
+                return self._run(session_id, text)
+            finally:
+                self.store.release_lease(session_id, owner)
+
+    def _busy(self, session_id: str) -> Reply:
+        state = self.load(session_id)
+        self.tracer_for(session_id).emit("session.busy", session_id=session_id)
+        return Reply(text=r.busy(), state=state, messages=[r.busy()])
 
     def load(self, session_id: str) -> WorkflowState:
         state = self.store.load_state(session_id)
@@ -121,6 +146,7 @@ class Agent:
             crash=self.crash,
             ids=self.ids,
             memory=self.memory,
+            llm=self.llm,
         )
         if text is not None:
             ctx.user_turn_id = self.store.add_turn(
@@ -192,6 +218,12 @@ class Agent:
         ctx.replies[:] = [r.handled_elsewhere(fresh.status.value.replace("_", " ").lower())]
 
     def _stop_mid_flight(self, ctx: RunContext, reason: str) -> None:
+        try:
+            self._stop_mid_flight_unsafe(ctx, reason)
+        except StaleState:
+            self._handled_elsewhere(ctx)
+
+    def _stop_mid_flight_unsafe(self, ctx: RunContext, reason: str) -> None:
         """Never leave a run 'in the middle' of a step.
 
         A failed read-only step falls back to the last resting state, keeping what the user
@@ -229,14 +261,11 @@ class Agent:
 
     def _handle_confirmation(self, ctx: RunContext, text: str) -> bool:
         """Returns True when the message was fully handled as an approval reply."""
-        decision, grant = grant_from_user_message(ctx, text)
+        decision = classify_reply(ctx, text)
         req = ctx.state.pending_approval
         assert req is not None
-        if grant is not None:
-            booking.execute(ctx, grant)
-            return True
         if decision == Decision.AFFIRM:
-            ctx.say(r.already_confirmed())
+            booking.execute(ctx)
             return True
         if decision == Decision.AMBIGUOUS:
             ctx.say(r.ambiguous_confirmation())

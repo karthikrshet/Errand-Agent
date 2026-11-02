@@ -15,7 +15,7 @@ Order of operations for `book` (the same shape applies to cancel/reschedule):
 from __future__ import annotations
 
 from errand.agent import responses as r
-from errand.agent.approval import ApprovalGrant, ApprovalRequest, idempotency_key_for
+from errand.agent.approval import ApprovalRequest, idempotency_key_for
 from errand.agent.approval_flow import request_approval
 from errand.agent.runtime import RunContext
 from errand.agent.state import State
@@ -26,27 +26,42 @@ from errand.tools import contracts as c
 MAX_BOOK_ATTEMPTS = 3
 
 
-def execute(ctx: RunContext, grant: ApprovalGrant) -> None:
+def execute(ctx: RunContext) -> None:
+    """Called only after the user's latest message was classified AFFIRM for the pending
+    request. Mints the single-use grant, consumes it and opens the intent atomically."""
     req = ctx.state.pending_approval
     if req is None:
         raise ApprovalInvalid("no pending approval")
-    _check_grant(ctx, grant, req)
-    ctx.move(State.EXECUTING, "approval_grant", f"grant {grant.grant_id}")
-    intent = ctx.store.consume_grant_and_create_intent(
-        grant, req, ctx.state.session_id, ctx.clock.now(), ctx.ids.new("i")
+    _check_request(ctx, req)
+    opened = ctx.store.grant_and_open_intent(
+        req,
+        session_id=ctx.state.session_id,
+        source_turn_id=ctx.user_turn_id or 0,
+        now=ctx.clock.now(),
+        grant_id=ctx.ids.new("g"),
+        intent_id=ctx.ids.new("i"),
     )
-    if intent is None:
+    if opened is None:
         _duplicate_confirmation(ctx, req)
         return
-    ctx.state.pending_approval = None
-    ctx.state.intent_id = intent.intent_id
+    grant, intent = opened
+    ctx.tracer.emit(
+        "approval.granted",
+        request_id=req.request_id,
+        grant_id=grant.grant_id,
+        fingerprint=grant.fingerprint,
+        source=grant.source,
+        source_turn_id=ctx.user_turn_id,
+    )
     ctx.tracer.emit(
         "approval.consumed",
         grant_id=grant.grant_id,
         intent_id=intent.intent_id,
         idempotency_key=intent.idempotency_key,
     )
-    ctx.save()
+    ctx.state.pending_approval = None
+    ctx.state.intent_id = intent.intent_id
+    ctx.move(State.EXECUTING, "approval_grant", f"grant {grant.grant_id}")
     ctx.crash.hit("after_intent_write")
     if req.action == "book":
         _book(ctx, intent)
@@ -56,13 +71,11 @@ def execute(ctx: RunContext, grant: ApprovalGrant) -> None:
         _reschedule(ctx, intent)
 
 
-def _check_grant(ctx: RunContext, grant: ApprovalGrant, req: ApprovalRequest) -> None:
-    """The grant must match the exact call: same user, same fingerprint, same live hold."""
+def _check_request(ctx: RunContext, req: ApprovalRequest) -> None:
+    """The approval must match the exact call we would make: same user, same live hold."""
     problems = []
-    if grant.user_id != ctx.user_id or req.user_id != ctx.user_id:
+    if req.user_id != ctx.user_id:
         problems.append("user mismatch")
-    if grant.fingerprint != req.fingerprint:
-        problems.append("fingerprint mismatch")
     if req.action == "book":
         hold = ctx.state.hold
         if hold is None or hold.hold_id != req.hold_id:
@@ -77,8 +90,12 @@ def _check_grant(ctx: RunContext, grant: ApprovalGrant, req: ApprovalRequest) ->
 
 
 def _duplicate_confirmation(ctx: RunContext, req: ApprovalRequest) -> None:
-    """Grant already consumed: report the existing intent's outcome, never act twice."""
+    """The approval is no longer pending: report what happened instead of acting twice."""
     existing = ctx.store.intent_by_key(idempotency_key_for(ctx.user_id, req.fingerprint))
+    if existing is None:
+        ctx.state.pending_approval = None
+        ctx.say(r.approval_invalidated("it was replaced or withdrawn"))
+        return
     ctx.tracer.emit(
         "approval.duplicate_confirmation",
         intent_id=existing.intent_id if existing else None,

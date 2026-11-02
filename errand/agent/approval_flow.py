@@ -1,7 +1,8 @@
 """Creating, presenting, invalidating and granting approval requests.
 
-Only this module creates ApprovalRequests and only `grant_from_user_message` creates grants,
-and it only ever receives the raw text of the user's latest message.
+Only this module creates ApprovalRequests. Whether a user message approves one is decided by
+`classify_reply` (deterministic rules over the raw latest user message); the grant itself is
+minted by booking.execute in the same transaction that consumes it and opens the intent.
 """
 
 from __future__ import annotations
@@ -9,13 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from errand.agent import responses as r
-from errand.agent.approval import (
-    Action,
-    ApprovalGrant,
-    ApprovalRequest,
-    Decision,
-    classify_confirmation,
-)
+from errand.agent.approval import Action, ApprovalRequest, Decision, classify_confirmation
 from errand.agent.runtime import RunContext
 
 
@@ -102,26 +97,11 @@ def reissue(ctx: RunContext, reason: str) -> ApprovalRequest | None:
     )
 
 
-def grant_from_user_message(
-    ctx: RunContext, user_text: str
-) -> tuple[Decision, ApprovalGrant | None]:
-    """Apply the deterministic confirmation rules to the latest user message."""
+def classify_reply(ctx: RunContext, user_text: str) -> Decision:
+    """Apply the deterministic confirmation rules to the raw latest user message."""
     req = ctx.state.pending_approval
     if req is None:
-        return Decision.NOT_APPROVAL, None
+        return Decision.NOT_APPROVAL
     decision = classify_confirmation(user_text, req.confirm_code)
     ctx.tracer.emit("approval.classified", request_id=req.request_id, decision=decision.value)
-    if decision != Decision.AFFIRM:
-        return decision, None
-    grant = ctx.store.issue_grant(req, ctx.user_turn_id or 0, ctx.clock.now(), ctx.ids.new("g"))
-    if grant is None:
-        return Decision.NOT_APPROVAL, None
-    ctx.tracer.emit(
-        "approval.granted",
-        request_id=req.request_id,
-        grant_id=grant.grant_id,
-        fingerprint=grant.fingerprint,
-        source="user_message",
-        source_turn_id=ctx.user_turn_id,
-    )
-    return decision, grant
+    return decision

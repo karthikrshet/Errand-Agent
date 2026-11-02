@@ -14,6 +14,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from errand.agent.approval import ApprovalRequest
+from errand.agent.review_summarizer import ReviewSummary
 from errand.domain.request import FieldSource, ServiceRequest
 from errand.errors import IllegalTransition
 
@@ -95,6 +96,7 @@ class Candidate(BaseModel):
     score: float
     reasons: list[str]
     injection_flagged: bool = False
+    review_summary: ReviewSummary | None = None
 
 
 class HoldInfo(BaseModel):

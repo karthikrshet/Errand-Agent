@@ -69,6 +69,9 @@ class Settings(BaseSettings):
     max_tool_calls_per_run: int = 25
     run_wall_clock_s: float = 60.0
     tool_timeout_s: float = 5.0
+    # Per-session lease: serialises turns across processes; TTL frees a crashed holder.
+    session_lease_ttl_s: float = 120.0
+    session_lease_wait_s: float = 10.0
 
     # Retries
     default_retry: RetryPolicy = Field(default_factory=RetryPolicy)
