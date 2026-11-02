@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Errand Agent</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --line:#2a2f3a; --text:#e6e8ee; --dim:#8a93a6;
+          --accent:#6aa9ff; --ok:#4cc38a; --warn:#f2b84b; --bad:#ff6b6b; --me:#24324a; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; background:var(--bg); color:var(--text); }
+  header { display:flex; gap:12px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:16px; margin:0; }
+  header .status { color:var(--dim); font-size:12px; }
+  header .badge { display:none; background:var(--bad); color:#fff; border-radius:999px; padding:2px 10px; font-size:12px; }
+  header .spacer { flex:1; }
+  button { background:#232835; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 10px; cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  main { display:grid; grid-template-columns: 1fr 1fr; height: calc(100vh - 49px); }
+  section { display:flex; flex-direction:column; min-height:0; }
+  #chat { border-right:1px solid var(--line); }
+  #log { flex:1; overflow:auto; padding:16px; display:flex; flex-direction:column; gap:10px; }
+  .msg { max-width:85%; padding:8px 12px; border-radius:10px; white-space:pre-wrap; background:var(--panel); border:1px solid var(--line); }
+  .msg.me { align-self:flex-end; background:var(--me); }
+  .card { border:1px solid var(--warn); background:#2a2416; border-radius:10px; padding:10px 12px; }
+  .card b { color:var(--warn); }
+  form { display:flex; gap:8px; padding:12px; border-top:1px solid var(--line); }
+  input { flex:1; background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:8px 10px; }
+  #trace { overflow:auto; padding:8px 12px; font:12px/1.4 ui-monospace, Consolas, monospace; }
+  .ev { padding:3px 0; border-bottom:1px dashed #20242d; }
+  .ev .k { display:inline-block; min-width:200px; }
+  .k.security { color:var(--bad); font-weight:600; } .k.approval { color:var(--warn); }
+  .k.booking { color:var(--ok); } .k.tool { color:var(--accent); } .k.state { color:#c49bff; }
+  .k.limit, .k.llm { color:#ff9f6b; } .k.run { color:var(--dim); }
+  .ev .d { color:var(--dim); }
+  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); margin:10px 12px 0; }
+  @media (max-width: 800px) { main { grid-template-columns:1fr; } #chat { border-right:0; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Errand Agent</h1>
+  <span class="status" id="status">IDLE</span>
+  <span class="badge" id="badge">injection detected &amp; ignored</span>
+  <span class="spacer"></span>
+  <button id="cancelBtn" title="Mock-only hook: the provider cancels the seeded AC booking">Provider cancels AC booking</button>
+  <button id="watchBtn" title="Run one proactive watcher tick (no user message)">Watcher tick</button>
+</header>
+<main>
+  <section id="chat">
+    <div id="log"></div>
+    <form id="form"><input id="text" autocomplete="off" placeholder="e.g. Find a plumber for my kitchen tap this week, mornings only, under ₹1,500"><button>Send</button></form>
+  </section>
+  <section>
+    <h2>Live trace</h2>
+    <div id="trace"></div>
+  </section>
+</main>
+<script>
+const SID = "web";
+const log = document.getElementById("log");
+const trace = document.getElementById("trace");
+const statusEl = document.getElementById("status");
+const badge = document.getElementById("badge");
+
+function add(text, mine) {
+  const el = document.createElement("div");
+  const isCard = !mine && /Please confirm:/.test(text);
+  el.className = "msg" + (mine ? " me" : "") + (isCard ? " card" : "");
+  el.textContent = text;
+  log.appendChild(el);
+  log.scrollTop = log.scrollHeight;
+}
+
+async function post(path, body) {
+  const res = await fetch(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body || {})});
+  const data = await res.json();
+  (data.messages || []).forEach(m => add(m, false));
+  if (data.status) statusEl.textContent = data.status + (data.approval ? " · code " + data.approval.code : "");
+}
+
+document.getElementById("form").addEventListener("submit", e => {
+  e.preventDefault();
+  const input = document.getElementById("text");
+  const text = input.value.trim();
+  if (!text) return;
+  add(text, true);
+  input.value = "";
+  post(`/api/sessions/${SID}/message`, {text});
+});
+document.getElementById("watchBtn").onclick = () => post(`/api/sessions/${SID}/watch`);
+document.getElementById("cancelBtn").onclick = async () => {
+  await fetch("/api/demo/provider-cancel", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({booking_id: "b_up_ac01"})});
+  add("(demo) provider cancelled booking b_up_ac01 - no user message sent; press 'Watcher tick'", false);
+};
+
+const KEYS = ["tool","from_state","to_state","trigger","reason","outcome","attempt","decision","confirm_code","grant_id","booking_id","idempotency_key","flags","channel","limit","purpose","input_tokens","latency_ms"];
+function summary(d) {
+  return KEYS.filter(k => d[k] !== undefined && d[k] !== null).map(k => `${k}=${typeof d[k] === "object" ? JSON.stringify(d[k]) : d[k]}`).join(" ");
+}
+const es = new EventSource("/api/trace");
+es.onmessage = msg => {
+  const ev = JSON.parse(msg.data);
+  if (ev.kind.startsWith("security")) badge.style.display = "inline-block";
+  const row = document.createElement("div");
+  row.className = "ev";
+  const k = document.createElement("span");
+  k.className = "k " + ev.kind.split(".")[0];
+  k.textContent = `${String(ev.seq).padStart(4)} ${ev.kind}`;
+  const d = document.createElement("span");
+  d.className = "d";
+  d.textContent = " " + summary(ev.data);
+  row.append(k, d);
+  trace.appendChild(row);
+  trace.scrollTop = trace.scrollHeight;
+};
+</script>
+</body>
+</html>
