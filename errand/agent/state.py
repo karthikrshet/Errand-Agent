@@ -142,6 +142,8 @@ class WorkflowState(BaseModel):
     asked_fields: list[str] = Field(default_factory=list)
     history_summary: str = ""
     counters: Counters = Field(default_factory=Counters)
+    # Optimistic-concurrency token for the persisted session row.
+    version: int = 0
 
     def can_transition(self, to: State) -> bool:
         return to in TRANSITIONS[self.status]
@@ -163,6 +165,7 @@ class WorkflowState(BaseModel):
             user_id=self.user_id,
             history_summary=self.history_summary,
             counters=self.counters,
+            version=self.version,
         )
         for name in WorkflowState.model_fields:
             setattr(self, name, getattr(fresh, name))

@@ -16,3 +16,4 @@ build/
 traces/*.jsonl
 !traces/timeout_after_success.jsonl
 !traces/examples/*.jsonl
+evals/.runs/

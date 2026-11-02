@@ -176,3 +176,36 @@ def test_crash_matrix_reconciles_to_one_outcome(tmp_path: Path, point: CrashPoin
     assert _new_bookings(restarted) == 1
     key = idempotency_key_for("u_demo", intents[0].approval_fingerprint)
     assert restarted.env.count_bookings(key) <= 1
+
+
+def test_stale_session_write_is_rejected(tmp_path: Path) -> None:
+    """Regression for BUGS.md #2: a stale snapshot must not overwrite a newer session state."""
+    from errand.agent.store import StaleState  # noqa: PLC0415
+
+    w = _world(tmp_path, get_scenario("happy_path"))
+    _to_approval(w)
+    a, b = w.agent.load("s1"), w.agent.load("s1")
+    a.status = State.COMPLETED
+    w.store.save_state(a, w.clock.now())
+    b.status = State.AWAITING_APPROVAL
+    with pytest.raises(StaleState):
+        w.store.save_state(b, w.clock.now())
+    assert w.agent.load("s1").status == State.COMPLETED
+
+
+def test_restart_reverifies_a_succeeded_intent_before_claiming(tmp_path: Path) -> None:
+    """Regression for BUGS.md #3: after a restart, success is re-checked at the source of truth."""
+    clock = FakeClock()
+    crash = CrashHooks({"after_booking_before_state_save"})
+    w = _world(tmp_path, Scenario(book_outcomes=["success"]), clock, crash)
+    _to_approval(w)
+    with pytest.raises(SimulatedCrash):
+        w.agent.handle_message("s1", "yes")
+    restarted = _world(tmp_path, Scenario(), clock)
+    r = restarted.agent.startup("s1")
+    tools = [e.data["tool"] for e in restarted.tracer.of_kind("tool.call")]
+    assert tools == ["get_booking_status"]
+    verified = restarted.tracer.of_kind("booking.verified")
+    assert verified
+    assert verified[0].data["via"] == "restart_check"
+    assert "verified" in r.text

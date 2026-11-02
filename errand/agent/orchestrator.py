@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 
 from errand.agent import booking, manage_flow, search_flow
 from errand.agent import responses as r
-from errand.agent.approval import Decision
+from errand.agent.approval import Decision, classify_confirmation
 from errand.agent.approval_flow import grant_from_user_message, invalidate_pending, reissue
 from errand.agent.crash import CrashHooks
 from errand.agent.limits import RunBudget
@@ -25,7 +25,7 @@ from errand.agent.nlu import NLU, SYSTEM_PROMPT, BookingRef, NLUResult
 from errand.agent.policy import PolicyViolation
 from errand.agent.runtime import RunContext
 from errand.agent.state import TERMINAL, State, WorkflowState
-from errand.agent.store import AgentStore
+from errand.agent.store import AgentStore, StaleState
 from errand.clock import Clock
 from errand.config import Settings
 from errand.domain.request import age_sources
@@ -120,6 +120,7 @@ class Agent:
             ctx.user_turn_id = self.store.add_turn(
                 session_id, state.user_id, "user", text, self.clock.now()
             )
+        tracer.begin_turn(self.ids.new("turn"))
         tracer.emit(
             "run.start",
             session_id=session_id,
@@ -131,9 +132,13 @@ class Agent:
         self._guarded(ctx, text)
         if not ctx.replies:
             ctx.say(r.didnt_understand() if text is not None else r.status([]))
+        try:
+            ctx.save()
+        except StaleState:
+            self._handled_elsewhere(ctx)
+        state = ctx.state
         reply_text = "\n\n".join(ctx.replies)
         self.store.add_turn(session_id, state.user_id, "assistant", reply_text, self.clock.now())
-        ctx.save()
         tracer.emit(
             "run.end",
             outcome=state.status.value,
@@ -142,6 +147,7 @@ class Agent:
             model_calls=budget.model_calls,
             totals=tracer.totals.model_dump(exclude={"tool_latencies_ms"}),
         )
+        tracer.end_turn()
         return Reply(text=reply_text, state=state, messages=list(ctx.replies))
 
     def _guarded(self, ctx: RunContext, text: str | None) -> None:
@@ -150,6 +156,8 @@ class Agent:
             booking.recover(ctx)
             if text is not None:
                 self._route(ctx, text)
+        except StaleState:
+            self._handled_elsewhere(ctx)
         except LimitExceeded as exc:
             ctx.tracer.emit("limit.hit", limit=exc.limit, value=exc.value)
             ctx.say(r.limit_hit(exc.limit))
@@ -170,11 +178,27 @@ class Agent:
             ctx.say(r.unexpected_error())
             self._stop_mid_flight(ctx, type(exc).__name__)
 
+    def _handled_elsewhere(self, ctx: RunContext) -> None:
+        """Lost a race with another process on this session: adopt its state, never overwrite."""
+        fresh = self.load(ctx.state.session_id)
+        ctx.tracer.emit("session.stale_write_rejected", kept_status=fresh.status.value)
+        ctx.state = fresh
+        ctx.replies[:] = [r.handled_elsewhere(fresh.status.value.replace("_", " ").lower())]
+
     def _stop_mid_flight(self, ctx: RunContext, reason: str) -> None:
-        """Never leave a run 'in the middle' of a step. PENDING intents stay for reconcile."""
+        """Never leave a run 'in the middle' of a step.
+
+        A failed read-only step falls back to the last resting state, keeping what the user
+        told us; a failure during execution goes to FAILED_SAFE (any PENDING intent is left for
+        reconciliation, so nothing is lost or double-booked).
+        """
         st = ctx.state
-        if st.status in MID_FLIGHT and st.can_transition(State.FAILED_SAFE):
-            ctx.move(State.FAILED_SAFE, "system", reason)
+        fallback = {State.SEARCHING: State.GATHERING, State.HOLDING: State.PRESENTING_OPTIONS}
+        to = fallback.get(st.status)
+        if to is None and st.status in MID_FLIGHT:
+            to = State.FAILED_SAFE
+        if to is not None and st.can_transition(to):
+            ctx.move(to, "system", reason)
 
     # ------------------------------------------------------------------ routing
 
@@ -182,6 +206,9 @@ class Agent:
         st = ctx.state
         st.counters.turns += 1
         st.sources = age_sources(st.sources)
+        if st.status == State.COMPLETED and _is_affirmation(text):
+            ctx.say(r.already_done(self._last_booking_id(ctx)))
+            return
         if st.status in TERMINAL:
             ctx.move(State.IDLE, "user_message", "new workflow")
             st.reset_workflow()
@@ -201,6 +228,9 @@ class Agent:
         assert req is not None
         if grant is not None:
             booking.execute(ctx, grant)
+            return True
+        if decision == Decision.AFFIRM:
+            ctx.say(r.already_confirmed())
             return True
         if decision == Decision.AMBIGUOUS:
             ctx.say(r.ambiguous_confirmation())
@@ -299,6 +329,14 @@ class Agent:
                 lines.append(f"Last verified booking: {intent.result.get('booking_id')}.")
         return r.status(lines)
 
+    def _last_booking_id(self, ctx: RunContext) -> str | None:
+        intent = ctx.store.intent(ctx.state.intent_id) if ctx.state.intent_id else None
+        return intent.result.get("booking_id") if intent and intent.result else None
+
     def _lock(self, session_id: str) -> threading.Lock:
         with self._locks_guard:
             return self._locks.setdefault(session_id, threading.Lock())
+
+
+def _is_affirmation(text: str) -> bool:
+    return classify_confirmation(text, "") == Decision.AFFIRM

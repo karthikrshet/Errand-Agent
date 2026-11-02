@@ -270,9 +270,40 @@ def recover(ctx: RunContext) -> None:
     if st.status in (State.EXECUTING, State.VERIFYING) and st.intent_id:
         current = ctx.store.intent(st.intent_id)
         if current is not None:
-            if current.status == "SUCCEEDED" and current.result:
-                ctx.say(r.reconcile_booked(current.result.get("booking_id", "")))
+            if current.status == "SUCCEEDED" and not _reverify(ctx, current):
+                return
             settle_session(ctx, current)
+
+
+def _reverify(ctx: RunContext, intent: BookingIntent) -> bool:
+    """Our own record says SUCCEEDED, but this run has not verified it: ask the source of truth
+    before telling the user anything (see docs/BUGS.md #3)."""
+    if intent.action != "book":
+        booking_id = (intent.result or {}).get("booking_id", "")
+        ctx.say(r.reconcile_booked(booking_id))
+        ctx.tracer.emit("booking.verified", intent_id=intent.intent_id, booking_id=booking_id,
+                        action=intent.action, via="intent_record")  # fmt: skip
+        return True
+    status = ctx.gateway.call(
+        "get_booking_status",
+        c.GetBookingStatusInput(idempotency_key=intent.idempotency_key),
+        c.BookingStatusOutput,
+        state=State.VERIFYING,
+    )
+    if status.status != "booked" or status.booking_id is None:
+        ctx.tracer.emit("booking.record_mismatch", intent_id=intent.intent_id, status=status.status)
+        _unverified(ctx, intent, "intent record disagrees with provider")
+        return False
+    ctx.tracer.emit(
+        "booking.verified",
+        intent_id=intent.intent_id,
+        booking_id=status.booking_id,
+        action="book",
+        idempotency_key=intent.idempotency_key,
+        via="restart_check",
+    )
+    ctx.say(r.reconcile_booked(status.booking_id))
+    return True
 
 
 def reconcile_intent(ctx: RunContext, intent: BookingIntent) -> None:

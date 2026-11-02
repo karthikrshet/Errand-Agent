@@ -22,6 +22,7 @@ from pydantic import BaseModel
 from errand.agent.approval import ApprovalGrant, ApprovalRequest, idempotency_key_for
 from errand.agent.state import WorkflowState
 from errand.db import connect, transaction
+from errand.errors import ErrandError
 
 IntentStatus = Literal["PENDING", "SUCCEEDED", "FAILED"]
 ApprovalStatus = Literal["pending", "invalidated", "granted", "rejected"]
@@ -35,6 +36,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     session_id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
     state TEXT NOT NULL,
+    version INTEGER NOT NULL,
     updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS turns (
@@ -84,6 +86,10 @@ CREATE TABLE IF NOT EXISTS booking_intents (
 """
 
 
+class StaleState(ErrandError):
+    """Another process saved this session after we loaded it."""
+
+
 class BookingIntent(BaseModel):
     intent_id: str
     session_id: str
@@ -121,11 +127,24 @@ class AgentStore:
     # ------------------------------------------------------------------ sessions / turns
 
     def save_state(self, state: WorkflowState, now: datetime) -> None:
-        self.conn.execute(
-            "INSERT INTO sessions VALUES (?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET "
-            "state = excluded.state, updated_at = excluded.updated_at",
-            (state.session_id, state.user_id, state.model_dump_json(), now.isoformat()),
-        )
+        """Compare-and-swap on `version`: a writer holding a stale snapshot is rejected
+        instead of silently overwriting a newer state (see docs/BUGS.md #2)."""
+        new = state.model_copy(update={"version": state.version + 1})
+        with transaction(self.conn):
+            if state.version == 0:
+                cur = self.conn.execute(
+                    "INSERT OR IGNORE INTO sessions VALUES (?, ?, ?, 1, ?)",
+                    (state.session_id, state.user_id, new.model_dump_json(), now.isoformat()),
+                )
+            else:
+                cur = self.conn.execute(
+                    "UPDATE sessions SET state = ?, version = version + 1, updated_at = ? "
+                    "WHERE session_id = ? AND version = ?",
+                    (new.model_dump_json(), now.isoformat(), state.session_id, state.version),
+                )
+            if cur.rowcount != 1:
+                raise StaleState(state.session_id)
+        state.version = new.version
 
     def load_state(self, session_id: str) -> WorkflowState | None:
         row = self.conn.execute(

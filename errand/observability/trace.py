@@ -7,6 +7,7 @@ up to the crash point (which is exactly when you want one).
 from __future__ import annotations
 
 import json
+import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -24,6 +25,8 @@ class TraceEvent(BaseModel):
     seq: int
     ts: str
     run_id: str
+    # Which user turn (run) emitted this; lets checks attribute interleaved concurrent runs.
+    turn: str | None = None
     kind: str
     data: dict[str, JsonValue]
 
@@ -75,15 +78,22 @@ class Tracer:
         self.listeners: list[Listener] = []
         self._timer = timer
         self._fh: TextIO | None = None
+        self._lock = threading.Lock()
+        self._local = threading.local()
         if path is not None:
             path.parent.mkdir(parents=True, exist_ok=True)
             self._fh = path.open("a", encoding="utf-8")
 
     def emit(self, kind: str, **data: object) -> TraceEvent:
+        with self._lock:
+            return self._emit(kind, data)
+
+    def _emit(self, kind: str, data: dict[str, object]) -> TraceEvent:
         event = TraceEvent(
             seq=len(self.events),
             ts=self.clock.now().isoformat(),
             run_id=self.run_id,
+            turn=getattr(self._local, "turn", None),
             kind=kind,
             data={k: redact(to_json(v)) for k, v in data.items()},
         )
@@ -95,6 +105,12 @@ class Tracer:
         for listener in list(self.listeners):
             listener(event)
         return event
+
+    def begin_turn(self, turn: str) -> None:
+        self._local.turn = turn
+
+    def end_turn(self) -> None:
+        self._local.turn = None
 
     @contextmanager
     def span(self, kind: str, **data: object) -> Iterator[Span]:

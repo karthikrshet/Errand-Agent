@@ -118,6 +118,22 @@ def code_mismatch(req: ApprovalRequest) -> str:
     )
 
 
+def already_confirmed() -> str:
+    return "That confirmation was already received and is being handled, so nothing new was done."
+
+
+def already_done(booking_id: str | None) -> str:
+    ref = f" (booking ID {booking_id})" if booking_id else ""
+    return f"That's already done{ref}; there's nothing more to confirm."
+
+
+def handled_elsewhere(status: str) -> str:
+    return (
+        "This conversation was updated from another window while I was working, so I kept "
+        f"that version. Current step: {status}."
+    )
+
+
 def rejected() -> str:
     return "OK, I haven't booked or changed anything. Tell me what you'd like to do instead."
 
