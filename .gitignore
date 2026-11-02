@@ -18,3 +18,8 @@ traces/*.jsonl
 !traces/examples/*.jsonl
 evals/.runs/
 *.ledger
+
+# local-only: build instructions, editor/preview config, the confidential brief
+CLAUDE.md
+.claude/
+docs/ASSIGNMENT.pdf
