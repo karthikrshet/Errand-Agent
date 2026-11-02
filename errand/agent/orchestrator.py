@@ -33,7 +33,9 @@ from errand.domain.time import to_ist
 from errand.errors import ApprovalInvalid, IllegalTransition, LimitExceeded
 from errand.ids import IdFactory
 from errand.llm.base import LLMClient
+from errand.memory import commands as memory_cmd
 from errand.memory.context import ContextBuilder
+from errand.memory.store import MemoryStore
 from errand.observability.trace import Tracer
 from errand.tools.gateway import RetriesExhausted, ToolGateway, Transport
 
@@ -58,9 +60,11 @@ class Agent:
         transport: Transport,
         store: AgentStore,
         tracer_for: TracerFactory,
+        memory: MemoryStore,
         rng: random.Random | None = None,
         crash: CrashHooks | None = None,
     ) -> None:
+        self.memory = memory
         self.settings = settings
         self.clock = clock
         self.llm = llm
@@ -115,6 +119,7 @@ class Agent:
             budget=budget,
             crash=self.crash,
             ids=self.ids,
+            memory=self.memory,
         )
         if text is not None:
             ctx.user_turn_id = self.store.add_turn(
@@ -254,10 +259,13 @@ class Agent:
             ctx.move(State.ABANDONED, "user_message", "declined approval")
 
     def _interpret(self, ctx: RunContext, text: str) -> NLUResult | None:
+        memories, excluded = self.memory.select_for_context(ctx.user_id, ctx.state.request)
         built = self.context.build(
             system_prompt=SYSTEM_PROMPT,
             user_text=text,
             state=ctx.state,
+            memories=memories,
+            excluded=excluded,
             summary=ctx.state.history_summary,
             turns=self.store.turns(ctx.user_id, limit=self.settings.recent_turns)[:-1],
         )
@@ -275,6 +283,9 @@ class Agent:
                 c, res.booking_ref, res.reschedule_to
             ),
             "status": lambda c, _: c.say(self._status(c)),
+            "memory_show": lambda c, _: memory_cmd.show(c),
+            "memory_update": self._on_memory_update,
+            "memory_forget": self._on_memory_forget,
             "abort": self._on_abort,
         }
         handlers.get(result.intent, self._on_other)(ctx, result)
@@ -283,7 +294,22 @@ class Agent:
         if ctx.state.status == State.RESCHEDULE_FLOW and result.patch.date_start is not None:
             manage_flow.propose_new_slot(ctx, result.patch.date_start, result.patch.earliest_hour)
         else:
+            if result.remember:
+                memory_cmd.remember_from_patch(ctx, result.patch, result.patch.service
+                                               or ctx.state.request.service)  # fmt: skip
             search_flow.handle_request(ctx, result)
+
+    def _on_memory_update(self, ctx: RunContext, result: NLUResult) -> None:
+        if result.memory is None:
+            ctx.say(r.didnt_understand())
+            return
+        memory_cmd.update(ctx, result.memory)
+
+    def _on_memory_forget(self, ctx: RunContext, result: NLUResult) -> None:
+        if result.memory is None:
+            ctx.say(r.didnt_understand())
+            return
+        memory_cmd.forget(ctx, result.memory)
 
     def _on_select(self, ctx: RunContext, result: NLUResult) -> None:
         status = ctx.state.status

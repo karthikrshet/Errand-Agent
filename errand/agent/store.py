@@ -176,6 +176,21 @@ class AgentStore:
         rows = self.conn.execute(sql, args).fetchall()
         return [Turn(turn_id=r["turn_id"], role=r["role"], text=r["text"]) for r in reversed(rows)]
 
+    def scrub_turns(self, user_id: str, values: list[str]) -> int:
+        """Remove forgotten values from stored conversation so they can't resurface in context."""
+        changed = 0
+        with transaction(self.conn):
+            for v in values:
+                if not v:
+                    continue
+                cur = self.conn.execute(
+                    "UPDATE turns SET text = replace(text, ?, '[forgotten]') "
+                    "WHERE user_id = ? AND instr(text, ?) > 0",
+                    (v, user_id, v),
+                )
+                changed += cur.rowcount
+        return changed
+
     # ------------------------------------------------------------------ approvals / grants
 
     def save_approval(self, req: ApprovalRequest, session_id: str) -> None:

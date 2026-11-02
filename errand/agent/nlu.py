@@ -36,6 +36,7 @@ MemoryKey = Literal[
     "preferred_area",
     "earliest_hour",
     "latest_hour",
+    "time_of_day",
     "preferred_provider",
     "blocked_provider",
     "budget_ceiling",

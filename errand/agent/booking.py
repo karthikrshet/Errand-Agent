@@ -161,6 +161,7 @@ def _succeeded(ctx: RunContext, intent: BookingIntent, booking_id: str) -> None:
     ctx.move(State.COMPLETED, "tool_result", f"verified {booking_id}")
     if req.action == "book":
         ctx.say(r.booked(booking_id, req.provider_name, req.slot, req.price_paise))
+        _maybe_infer(ctx)
     elif req.action == "cancel":
         ctx.say(r.cancelled(booking_id, req.provider_name, req.slot))
     else:
@@ -410,3 +411,13 @@ def settle_session(ctx: RunContext, intent: BookingIntent) -> None:
         )
         return
     ctx.move(State.FAILED_SAFE, "system", "reconciled: not done")
+
+
+def _maybe_infer(ctx: RunContext) -> None:
+    """Best effort: preference inference must never affect a verified booking's outcome."""
+    from errand.memory.commands import infer_preferences  # noqa: PLC0415 - avoid import cycle
+
+    try:
+        infer_preferences(ctx)
+    except ErrandError as exc:
+        ctx.tracer.emit("memory.infer_skipped", error=type(exc).__name__)

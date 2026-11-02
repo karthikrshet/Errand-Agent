@@ -29,6 +29,7 @@ from errand.config import Settings
 from errand.llm.base import LLMError, LLMRequest
 from errand.llm.script import nlu
 from errand.llm.scripted import ScriptedClient
+from errand.memory.store import MemoryStore
 from errand.observability.trace import Tracer
 from errand.tools.scenarios import Scenario as WorldScenario
 
@@ -250,6 +251,7 @@ def _concurrent(run: EvalRun, step: Concurrent) -> None:
                 settings=run.settings,
             ),
             store=AgentStore(run.workdir / "agent.db"),
+            memory=MemoryStore(run.workdir / "agent.db"),
             tracer_for=lambda _s: run.tracer,
             crash=run.crash,
         )

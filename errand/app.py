@@ -15,6 +15,7 @@ from errand.agent.store import AgentStore
 from errand.clock import Clock, SystemClock
 from errand.config import Settings
 from errand.llm.base import LLMClient
+from errand.memory.store import MemoryStore
 from errand.observability.trace import Tracer
 from errand.tools.mock_env import MockToolEnv
 from errand.tools.scenarios import Scenario
@@ -62,6 +63,7 @@ def build_world(
         llm=llm,
         transport=env,
         store=store,
+        memory=MemoryStore(db),
         tracer_for=lambda _session: tracer,
         rng=random.Random(f"agent:{settings.seed}"),
         crash=crash,

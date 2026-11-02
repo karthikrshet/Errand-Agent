@@ -18,6 +18,7 @@ from errand.agent.store import AgentStore
 from errand.clock import Clock
 from errand.config import Settings
 from errand.ids import IdFactory
+from errand.memory.store import MemoryStore
 from errand.observability.trace import Tracer
 from errand.tools.gateway import ToolGateway
 
@@ -35,6 +36,7 @@ class RunContext:
     budget: RunBudget
     crash: CrashHooks
     ids: IdFactory
+    memory: MemoryStore
     user_turn_id: int | None = None
     replies: list[str] = field(default_factory=list)
 

@@ -14,6 +14,7 @@ from errand.agent.untrusted import sanitize
 from errand.domain.request import MATERIAL_FIELDS, merge_patch
 from errand.domain.time import to_ist
 from errand.errors import InvalidRequest
+from errand.memory import commands as memory_cmd
 from errand.tools import contracts as c
 from errand.tools.catalog import SERVICES
 
@@ -42,6 +43,7 @@ def handle_request(ctx: RunContext, result: NLUResult) -> None:
         ctx.say(r.unsupported_service(req.service))
         st.request.service = None
         return
+    memory_cmd.apply_defaults(ctx)
     if req.same_provider_as_last and req.preferred_provider_id is None and req.service:
         _resolve_last_provider(ctx, req.service)
     missing = req.missing()
