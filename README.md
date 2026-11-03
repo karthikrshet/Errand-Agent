@@ -4,7 +4,7 @@
 
 [![Errand Agent demo: a live booking with the trace streaming beside the chat](docs/demo/errand-agent-demo.gif)](https://github.com/karthikrshet/Errand-Agent/raw/main/docs/demo/errand-agent-demo.mp4)
 
-**▶ [Watch the full narrated demo (4 min)](docs/demo/errand-agent-demo.mp4).** It walks through
+**▶ [Watch the full narrated demo (4 min, MP4)](https://github.com/karthikrshet/Errand-Agent/raw/main/docs/demo/errand-agent-demo.mp4).** It walks through
 the architecture and the five guarantees, then shows the real app:
 
 - a live booking driven by an on-screen cursor;
