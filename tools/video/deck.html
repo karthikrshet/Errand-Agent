@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Errand Agent film</title>
+<style>
+  :root { --bg:#070a12; --ink:#eef2fb; --dim:#8f9bb3; --acc:#ffd166; --blue:#6aa9ff; --green:#4cc38a;
+          --red:#ff6b6b; --violet:#b48cff; --panel:rgba(255,255,255,.045); --line:rgba(255,255,255,.12); }
+  * { box-sizing:border-box; margin:0; }
+  html, body { width:1280px; height:720px; overflow:hidden; background:var(--bg); color:var(--ink);
+    font-family:'Segoe UI', system-ui, sans-serif; }
+  body::before { content:""; position:fixed; inset:-20%; z-index:0;
+    background: radial-gradient(40% 40% at 20% 25%, rgba(106,169,255,.20), transparent 70%),
+                radial-gradient(35% 35% at 80% 70%, rgba(255,209,102,.13), transparent 70%),
+                radial-gradient(30% 30% at 60% 15%, rgba(180,140,255,.12), transparent 70%);
+    animation: drift 18s ease-in-out infinite alternate; }
+  body::after { content:""; position:fixed; inset:0; z-index:0; opacity:.35;
+    background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px);
+    background-size: 64px 64px; mask-image: radial-gradient(70% 70% at 50% 45%, #000 30%, transparent 85%); }
+  @keyframes drift { to { transform: translate(4%, -3%) scale(1.06); } }
+  section { position:absolute; inset:0; z-index:1; display:none; padding:56px 72px; }
+  section.on { display:block; }
+  [data-s] { opacity:0; transform: translateY(14px); transition: opacity .7s ease, transform .7s cubic-bezier(.22,.8,.3,1); }
+  [data-s].in { opacity:1; transform:none; }
+  .kicker { color:var(--acc); font:700 14px/1 'Segoe UI'; letter-spacing:.32em; text-transform:uppercase; }
+  h1 { font-size:86px; font-weight:800; letter-spacing:-2px; line-height:1; margin-top:18px; }
+  h2 { font-size:40px; font-weight:750; letter-spacing:-.6px; }
+  .lead { font-size:26px; color:var(--dim); margin-top:22px; max-width:900px; line-height:1.35; }
+  .glow { background: linear-gradient(92deg, #fff 10%, var(--acc) 55%, #ff9f6b 90%); -webkit-background-clip:text;
+          background-clip:text; color:transparent; }
+  /* title */
+  #title { display:none; }
+  #title.on { display:flex; flex-direction:column; justify-content:center; padding-left:110px; }
+  .motto { margin-top:34px; display:flex; gap:18px; }
+  .pill { padding:12px 22px; border-radius:999px; border:1px solid var(--line); background:var(--panel); font-size:22px; }
+  .pill b { color:var(--acc); }
+  /* architecture */
+  .box { position:absolute; padding:12px 16px; border-radius:14px; background:rgba(14,19,32,.92);
+         border:1px solid var(--line); box-shadow:0 10px 30px rgba(0,0,0,.35); font-size:17px; line-height:1.3; }
+  .box b { display:block; font-size:19px; margin-bottom:3px; }
+  .box small { color:var(--dim); font-size:14px; }
+  .box.user { border-color:var(--blue); } .box.core { border-color:var(--acc); }
+  .box.safe { border-color:var(--green); } .box.quar { border-color:var(--red); } .box.mem { border-color:var(--violet); }
+  svg.wires { position:absolute; inset:0; top:-40px; pointer-events:none; }
+  #arch .box { margin-top:-40px; }
+  svg.wires path { fill:none; stroke:rgba(255,255,255,.45); stroke-width:2; stroke-dasharray:600; stroke-dashoffset:600;
+                   transition: stroke-dashoffset 1.2s ease; marker-end:url(#arrow); }
+  svg.wires path.in { stroke-dashoffset:0; }
+  /* guarantees */
+  .cards { display:grid; grid-template-columns: repeat(5, 1fr); gap:16px; margin-top:44px; }
+  .card { padding:22px 18px; border-radius:18px; background:var(--panel); border:1px solid var(--line); min-height:300px; }
+  .card .ico { width:48px; height:48px; border-radius:12px; display:grid; place-items:center; font-size:26px;
+               background:rgba(255,209,102,.14); margin-bottom:16px; }
+  .card h3 { font-size:21px; margin-bottom:10px; }
+  .card p { color:var(--dim); font-size:16px; line-height:1.4; }
+  /* evals */
+  .term { margin-top:30px; height:420px; border-radius:14px; background:#05070c; border:1px solid var(--line);
+          box-shadow:0 20px 60px rgba(0,0,0,.5); overflow:hidden; font:15px/1.55 Consolas, 'Cascadia Mono', monospace; }
+  .term .bar { height:34px; background:#0e1320; display:flex; align-items:center; gap:8px; padding:0 14px; }
+  .term .bar i { width:12px; height:12px; border-radius:50%; display:inline-block; }
+  .term pre { padding:14px 18px; color:#cfd6e6; white-space:pre; height:386px; overflow:hidden; }
+  .ok { color:var(--green); } .num { color:var(--acc); font-weight:700; }
+  .stats { position:absolute; right:72px; top:150px; display:flex; flex-direction:column; gap:14px; width:290px; }
+  .stat { padding:16px 18px; border-radius:14px; background:var(--panel); border:1px solid var(--line); }
+  .stat b { font-size:38px; display:block; color:var(--acc); }
+  .stat span { color:var(--dim); font-size:15px; }
+  /* outro */
+  #outro.on { display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; }
+  .links { margin-top:30px; color:var(--dim); font-size:20px; }
+</style>
+</head>
+<body>
+
+<section id="title">
+  <div class="kicker" data-s="0">Founding AI Engineer · take-home</div>
+  <h1 data-s="0"><span class="glow">Errand Agent</span></h1>
+  <div class="lead" data-s="0">A chat assistant that books home services: plumber, electrician, AC servicing.</div>
+  <div class="motto" data-s="1">
+    <div class="pill">The <b>LLM proposes</b></div>
+    <div class="pill"><b>Code disposes</b></div>
+  </div>
+  <div class="lead" data-s="2" style="font-size:22px">How it works → then we try to break it.</div>
+</section>
+
+<section id="arch">
+  <div class="kicker" data-s="0">Architecture</div>
+  <h2 data-s="0">One message, end to end</h2>
+  <svg class="wires" viewBox="0 0 1280 720">
+    <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="rgba(255,255,255,.6)"/></marker></defs>
+    <path data-w="0" d="M210 330 L300 330"/>
+    <path data-w="1" d="M470 290 L560 200"/>
+    <path data-w="2" d="M470 330 L560 330"/>
+    <path data-w="3" d="M470 370 L560 460"/>
+    <path data-w="3" d="M800 460 L880 400"/>
+    <path data-w="2" d="M800 330 L880 360"/>
+    <path data-w="4" d="M1060 400 L1060 448"/>
+    <path data-w="4" d="M1000 520 L1000 550"/>
+    <path data-w="5" d="M1130 300 L1130 250"/>
+    <path data-w="6" d="M680 500 L680 535"/>
+  </svg>
+  <div class="box user" data-s="0" style="left:70px;top:300px;width:140px"><b>User</b><small>chat message</small></div>
+  <div class="box core" data-s="0" style="left:300px;top:270px;width:170px"><b>Orchestrator</b><small>per-session lease<br>top-level guard<br>hard limits</small></div>
+  <div class="box safe" data-s="1" style="left:560px;top:160px;width:240px"><b>1 · Recover</b><small>reconcile PENDING intents via get_booking_status</small></div>
+  <div class="box safe" data-s="2" style="left:560px;top:295px;width:240px"><b>2 · Approval rules</b><small>deterministic, no LLM · single-use grant</small></div>
+  <div class="box core" data-s="3" style="left:560px;top:420px;width:240px"><b>3 · NLU (LLM)</b><small>message → schema-validated intent</small></div>
+  <div class="box core" data-s="3" style="left:880px;top:330px;width:250px"><b>Flows</b><small>search · hold · book · cancel · reschedule</small></div>
+  <div class="box safe" data-s="4" style="left:880px;top:448px;width:300px"><b>ToolGateway</b><small>state allowlist · retries · schema check</small></div>
+  <div class="box" data-s="4" style="left:880px;top:550px;width:300px"><b>Mock provider</b><small>8 tools · own SQLite ledger</small></div>
+  <div class="box" data-s="4" style="left:300px;top:535px;width:220px"><b>Trace</b><small>JSONL · tokens · latency · cost</small></div>
+  <div class="box quar" data-s="5" style="left:1000px;top:160px;width:240px"><b>Review sub-agent</b><small>quarantined · zero tools · enum output</small></div>
+  <div class="box mem" data-s="6" style="left:560px;top:535px;width:280px"><b>Memory + Context</b><small>hard token budget · per-call manifest</small></div>
+</section>
+
+<section id="guarantees">
+  <div class="kicker" data-s="0">Enforced in code</div>
+  <h2 data-s="0">Five guarantees, not five hopes</h2>
+  <div class="cards">
+    <div class="card" data-s="1"><div class="ico">✅</div><h3>No action without approval</h3><p>Single-use grant, fingerprinted to provider, slot and price. Ambiguous replies never grant.</p></div>
+    <div class="card" data-s="2"><div class="ico">🧾</div><h3>No double booking</h3><p>Write-ahead intent, idempotency key, unique constraints, atomic grant + intent.</p></div>
+    <div class="card" data-s="3"><div class="ico">🔍</div><h3>Booked only if verified</h3><p>On timeout, ask get_booking_status first. Claims checked against the ledger.</p></div>
+    <div class="card" data-s="4"><div class="ico">🛡️</div><h3>Injection can't act</h3><p>Tool-less sub-agent reads reviews. Per-state tool allowlist. Grants only from the user.</p></div>
+    <div class="card" data-s="5"><div class="ico">🧠</div><h3>Forgetting is real</h3><p>Value scrubbed from memory, history and live requests. The manifest proves it.</p></div>
+  </div>
+</section>
+
+<section id="evals">
+  <div class="kicker" data-s="0">Evaluation</div>
+  <h2 data-s="0">make eval</h2>
+  <div class="term" data-s="0" style="width:800px">
+    <div class="bar"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div>
+    <pre id="termtext"></pre>
+  </div>
+  <div class="stats">
+    <div class="stat" data-s="1"><b>46 / 46</b><span>43 scenarios + 3 real-Claude replays</span></div>
+    <div class="stat" data-s="2"><b>7</b><span>invariants, recomputed every scenario</span></div>
+    <div class="stat" data-s="3"><b>9</b><span>real bugs, each with a regression test</span></div>
+  </div>
+</section>
+
+<section id="outro">
+  <h1 data-s="0" style="font-size:72px"><span class="glow">Errand Agent</span></h1>
+  <div class="lead" data-s="0" style="text-align:center">Safety enforced in code · every failure traced · every claim tested</div>
+  <div class="links" data-s="1">github.com/karthikrshet/Errand-Agent</div>
+</section>
+
+<script>
+  const scene = new URLSearchParams(location.search).get('s') || 'title';
+  document.getElementById(scene).classList.add('on');
+  // Called by the recorder at the start of each spoken sentence.
+  window.__reveal = (i) => {
+    const root = document.getElementById(scene);
+    root.querySelectorAll('[data-s]').forEach(el => { if (+el.dataset.s <= i) el.classList.add('in'); });
+    root.querySelectorAll('[data-w]').forEach(el => { if (+el.dataset.w <= i) el.classList.add('in'); });
+    if (scene === 'evals' && i === 0) typeEvals();
+  };
+  function typeEvals() {
+    const pre = document.getElementById('termtext');
+    const lines = window.__evalLines || [];
+    let k = 0;
+    const tick = () => {
+      if (k >= lines.length) return;
+      const line = lines[k++];
+      const span = document.createElement('div');
+      span.textContent = line;
+      if (line.startsWith('PASS')) span.className = 'ok';
+      if (/passed in/.test(line)) span.className = 'num';
+      pre.appendChild(span);
+      pre.scrollTop = pre.scrollHeight;
+      setTimeout(tick, k < 3 ? 260 : 85);
+    };
+    tick();
+  }
+</script>
+</body>
+</html>

@@ -53,6 +53,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["PLR2004", "S101", "RUF001"]  # fixtures use confusable unicode on purpose
 "evals/**" = ["PLR2004"]
+"tools/video/script.py" = ["E501"]  # narration sentences are prose data
 
 [tool.mypy]
 python_version = "3.11"

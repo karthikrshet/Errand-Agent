@@ -2,7 +2,7 @@
 # Windows without make: `uv run python tasks.py <target>`.
 RUN := uv run python tasks.py
 
-.PHONY: install check lint typecheck fmt test eval ui record trace demo
+.PHONY: install check lint typecheck fmt test eval ui record trace demo video
 
 install:
 	uv sync --all-extras
@@ -35,3 +35,6 @@ trace:
 	$(RUN) trace
 
 demo: ui
+
+video:
+	$(RUN) video

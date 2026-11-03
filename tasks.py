@@ -3,6 +3,7 @@ can run the same targets: `python tasks.py check`."""
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from collections.abc import Callable
@@ -53,6 +54,11 @@ def trace() -> None:
     _run(PY, "-m", "evals.make_trace")
 
 
+def video() -> None:
+    """Render the narrated demo film (see tools/video/README.md for the tool env)."""
+    _run(os.environ.get("VIDEO_PYTHON", PY), "tools/video/make_video.py")
+
+
 def ui() -> None:
     _run(PY, "-m", "uvicorn", "errand.web.app:app", "--port", "8000")
 
@@ -67,6 +73,7 @@ TASKS: dict[str, Callable[[], None]] = {
     "ui": ui,
     "record": record,
     "trace": trace,
+    "video": video,
 }
 
 

@@ -21,3 +21,4 @@ One line each: what was chosen, and why.
 - **Forgetting scrubs conversation turns too**, not just the memory row, so a forgotten value cannot resurface via history or summaries.
 - **Required fields are service, area, date window**; budget and time-of-day are optional constraints (asked about only implicitly via memory/defaults).
 - **In-process mock tools**: per-tool timeouts are simulated by the mock raising `ToolTimeout`; a real HTTP adapter would enforce `tool_timeout_s` on the client.
+- **Demo film generated from the real system** (`tools/video/`): Playwright drives the actual app, narration uses the offline Windows voices (no text leaves the machine), and ffmpeg assembles it, so the video can be regenerated after any change.

@@ -95,6 +95,12 @@ class BackgroundWatcher:
                         self._inbox.setdefault(sid, []).extend(news)
 
 
+def _startup_messages(world: World, sid: str) -> list[str]:
+    """Only surface startup output that says something (e.g. a reconciled booking)."""
+    idle = r.status([])
+    return [m for m in world.agent.startup(sid).messages if m != idle]
+
+
 def _default_llm(settings: Settings) -> LLMClient:
     script = os.environ.get("ERRAND_SCRIPT")
     if script == "demo":
@@ -133,7 +139,7 @@ def create_app(world: World | None = None, watch_interval_s: float | None = None
         if sid in started:
             return []
         started.add(sid)
-        return world.agent.startup(sid).messages
+        return _startup_messages(world, sid)
 
     def reply_json(sid: str, messages: list[str]) -> dict[str, object]:
         st = world.agent.load(sid)
