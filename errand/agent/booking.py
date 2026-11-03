@@ -20,10 +20,14 @@ from errand.agent.approval_flow import request_approval
 from errand.agent.runtime import RunContext
 from errand.agent.state import State
 from errand.agent.store import BookingIntent
-from errand.errors import ApprovalInvalid, ErrandError, ToolTimeout
+from errand.errors import ApprovalInvalid, ErrandError, MalformedToolResponse, ToolTimeout
 from errand.tools import contracts as c
+from errand.tools.gateway import RetriesExhausted, UnexpectedToolError
 
 MAX_BOOK_ATTEMPTS = 3
+
+# The side effect may or may not have happened: only the provider's records can say which.
+OUTCOME_UNKNOWN = (ToolTimeout, MalformedToolResponse, UnexpectedToolError, RetriesExhausted)
 
 
 def execute(ctx: RunContext) -> None:
@@ -135,9 +139,11 @@ def _book(ctx: RunContext, intent: BookingIntent) -> None:
                 c.BookInput(hold_id=req.hold_id, idempotency_key=intent.idempotency_key),
                 c.BookOutput,
             )
-        except ToolTimeout:
+        except OUTCOME_UNKNOWN as exc:
             if ctx.state.status != State.VERIFYING:
-                ctx.move(State.VERIFYING, "tool_result", "book timed out")
+                ctx.move(
+                    State.VERIFYING, "tool_result", f"book outcome unknown: {type(exc).__name__}"
+                )
             status = _status(ctx, intent)
             if status is None:
                 return
@@ -252,24 +258,32 @@ def _unverified(ctx: RunContext, intent: BookingIntent, why: str) -> None:
 def _cancel(ctx: RunContext, intent: BookingIntent) -> None:
     req = intent.request
     assert req.booking_id is not None
-    out = ctx.tool(
-        "cancel",
-        c.CancelInput(booking_id=req.booking_id, idempotency_key=intent.idempotency_key),
-        c.CancelOutput,
-    )
+    try:
+        out = ctx.tool(
+            "cancel",
+            c.CancelInput(booking_id=req.booking_id, idempotency_key=intent.idempotency_key),
+            c.CancelOutput,
+        )
+    except OUTCOME_UNKNOWN as exc:
+        _unverified(ctx, intent, f"cancel outcome unknown: {type(exc).__name__}")
+        return
     _succeeded(ctx, intent, out.booking_id)
 
 
 def _reschedule(ctx: RunContext, intent: BookingIntent) -> None:
     req = intent.request
     assert req.booking_id is not None
-    out = ctx.tool(
-        "reschedule",
-        c.RescheduleInput(
-            booking_id=req.booking_id, slot=req.slot, idempotency_key=intent.idempotency_key
-        ),
-        c.RescheduleOutput,
-    )
+    try:
+        out = ctx.tool(
+            "reschedule",
+            c.RescheduleInput(
+                booking_id=req.booking_id, slot=req.slot, idempotency_key=intent.idempotency_key
+            ),
+            c.RescheduleOutput,
+        )
+    except OUTCOME_UNKNOWN as exc:
+        _unverified(ctx, intent, f"reschedule outcome unknown: {type(exc).__name__}")
+        return
     if out.outcome == "rescheduled":
         _succeeded(ctx, intent, out.booking_id)
         return
@@ -299,6 +313,13 @@ def _finish_from_intent(ctx: RunContext, intent: BookingIntent) -> None:
 def recover(ctx: RunContext) -> None:
     """Run before any new input: resolve PENDING intents, then un-stick this session."""
     for intent in ctx.store.pending_intents(ctx.user_id):
+        if intent.session_id != ctx.state.session_id and ctx.store.lease_active(
+            intent.session_id, ctx.clock.now()
+        ):
+            # Another tab's turn is mid-call on this intent: asking now could read "not booked"
+            # a moment before its book lands (BUGS #11). That turn settles it itself.
+            ctx.tracer.emit("reconcile.skipped_in_flight", intent_id=intent.intent_id)
+            continue
         ctx.tracer.emit("reconcile.start", intent_id=intent.intent_id, action=intent.action)
         reconcile_intent(ctx, intent)
     st = ctx.state

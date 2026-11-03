@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 from errand.agent.approval import ApprovalGrant, ApprovalRequest, idempotency_key_for
 from errand.agent.state import WorkflowState
-from errand.db import connect, transaction
+from errand.db import ConnectionPool, transaction
 from errand.errors import ErrandError
 
 IntentStatus = Literal["PENDING", "SUCCEEDED", "FAILED"]
@@ -128,8 +128,12 @@ class Turn(BaseModel):
 
 class AgentStore:
     def __init__(self, db: Path | str | sqlite3.Connection) -> None:
-        self.conn = db if isinstance(db, sqlite3.Connection) else connect(db)
+        self._pool = ConnectionPool(db)
         self.conn.executescript(SCHEMA)
+
+    @property
+    def conn(self) -> sqlite3.Connection:
+        return self._pool.get()
 
     def next_boot(self) -> int:
         """Increment and return the process boot counter (seeds the ID factory)."""
@@ -341,6 +345,14 @@ class AgentStore:
                 (session_id, owner, expires),
             )
         return True
+
+    def lease_active(self, session_id: str, now: datetime) -> bool:
+        """True while a turn is live on `session_id` (any intent it opened may be in flight)."""
+        row = self.conn.execute(
+            "SELECT 1 FROM session_leases WHERE session_id = ? AND expires_at > ?",
+            (session_id, now.isoformat()),
+        ).fetchone()
+        return row is not None
 
     def release_lease(self, session_id: str, owner: str) -> None:
         self.conn.execute(

@@ -1,13 +1,19 @@
-"""Scenarios built from defects an independent review reproduced (docs/BUGS.md #5-#9).
+"""Scenarios built from defects an independent review reproduced (docs/BUGS.md #5-#11).
 
 Each one is the reviewer's reproduction, kept as a permanent eval.
 """
 
 from __future__ import annotations
 
+from typing import Any
+
+from errand.agent.orchestrator import Agent, Reply
 from errand.agent.state import State
+from errand.agent.store import AgentStore
 from errand.domain.time import to_ist
 from errand.llm.script import nlu
+from errand.memory.store import MemoryStore
+from errand.observability.trace import Tracer
 from errand.tools.scenarios import get_scenario
 from evals.harness import Do, EvalRun, EvalScenario, ProactiveCheck, ProviderCancels, Say
 from evals.scenarios.common import (
@@ -224,6 +230,117 @@ DEFAULT_ODDS = EvalScenario(
     _default_odds,
 )
 
+
+class _LoseBookResponse:
+    """The provider books, then the response is lost: garbled payload or a dropped connection."""
+
+    def __init__(self, inner: Any, mode: str) -> None:
+        self.inner, self.mode = inner, mode
+
+    def call(self, tool: str, args: dict[str, Any]) -> dict[str, Any]:
+        out: dict[str, Any] = self.inner.call(tool, args)
+        if tool != "book":
+            return out
+        if self.mode == "malformed":
+            return {"status": "ok"}
+        raise ConnectionResetError("connection reset by peer")
+
+
+def _lose_book_response(mode: str) -> Do:
+    def arm(r: EvalRun) -> None:
+        r.world.agent.transport = _LoseBookResponse(r.world.agent.transport, mode)
+
+    return Do(arm)
+
+
+@checks
+def _lost_response(r: EvalRun, c: Checks) -> None:
+    c.that(r.new_bookings() == 1, f"{r.new_bookings()} bookings")
+    c.that(r.tool_calls("get_booking_status"), "did not ask the source of truth")
+    c.that(final_state(r) == State.COMPLETED, f"final {final_state(r)}")
+    c.that("Booked and verified" in r.last.text, "did not report the verified booking")
+    c.that("Nothing was booked" not in " ".join(r.texts()), "claimed nothing was booked")
+
+
+def _lost_scenario(sid: str, mode: str, what: str) -> EvalScenario:
+    return EvalScenario(
+        sid,
+        f"book_response_lost_{mode}",
+        f"book() succeeds at the provider but {what} -> treated as outcome-unknown: "
+        "get_booking_status first, report the verified booking, never 'nothing was booked'",
+        [ask_plumber(), pick(1), _lose_book_response(mode), YES],
+        _lost_response,
+        get_scenario("happy_path"),
+    )
+
+
+LOST_MALFORMED = _lost_scenario("35a", "malformed", "the response payload is garbled")
+LOST_CONNECTION = _lost_scenario("35b", "conn_reset", "the connection drops before the reply")
+
+
+class _OtherTabDuringBook:
+    """While this tab's book() is in flight, the watcher ticks on another tab of the same user.
+
+    The other tab is its own Agent (as if another worker process) sharing the database files,
+    with its own trace, so the two runs do not interleave in one trace file.
+    """
+
+    def __init__(self, run: EvalRun) -> None:
+        self.run, self.inner, self.fired = run, run.world.agent.transport, False
+        self.tracer = Tracer(run.clock, "other-tab", run.workdir / "other-tab.jsonl")
+        self.other = Agent(
+            settings=run.settings,
+            clock=run.clock,
+            llm=run.llm,
+            transport=self.inner,
+            store=AgentStore(run.workdir / "agent.db"),
+            memory=MemoryStore(run.workdir / "agent.db"),
+            tracer_for=lambda _s: self.tracer,
+            crash=run.crash,
+        )
+        self.reply: Reply | None = None
+
+    def call(self, tool: str, args: dict[str, Any]) -> dict[str, Any]:
+        if tool == "book" and not self.fired:
+            self.fired = True
+            self.reply = self.other.proactive_check("other-tab")
+        out: dict[str, Any] = self.inner.call(tool, args)
+        return out
+
+
+_OTHER_TABS: list[_OtherTabDuringBook] = []
+
+
+def _arm_other_tab(r: EvalRun) -> None:
+    tab = _OtherTabDuringBook(r)
+    _OTHER_TABS[:] = [tab]
+    r.world.agent.transport = tab
+
+
+@checks
+def _other_tab(r: EvalRun, c: Checks) -> None:
+    tab = _OTHER_TABS[-1]
+    c.that(tab.reply is not None, "other tab never ticked")
+    other = tab.reply.text if tab.reply else ""
+    c.that("Nothing was booked" not in other, "other tab declared the in-flight book failed")
+    tab.tracer.close()
+    c.that(tab.tracer.of_kind("reconcile.skipped_in_flight"), "in-flight intent not skipped")
+    c.that(r.new_bookings() == 1, f"{r.new_bookings()} bookings")
+    c.that("Booked and verified" in r.last.text, "main tab did not report the booking")
+    intents = r.world.store.all_intents()
+    c.that([i.status for i in intents] == ["SUCCEEDED"], f"intents {[i.status for i in intents]}")
+
+
+OTHER_TAB_IN_FLIGHT = EvalScenario(
+    "36",
+    "other_tab_reconcile_during_book",
+    "A watcher tick on a second tab runs while the first tab's book() is in flight -> it leaves "
+    "the live intent alone (the owning session holds a lease); exactly one verified booking",
+    [ask_plumber(), pick(1), Do(_arm_other_tab), YES],
+    _other_tab,
+    get_scenario("happy_path"),
+)
+
 SCENARIOS = [
     DEFAULT_ODDS,
     FORGET_AFTER_USE,
@@ -232,4 +349,7 @@ SCENARIOS = [
     TARGET_GONE,
     AMBIGUOUS_CHANGE,
     DEFERRED_PROACTIVE,
+    LOST_MALFORMED,
+    LOST_CONNECTION,
+    OTHER_TAB_IN_FLIGHT,
 ]

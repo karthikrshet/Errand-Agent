@@ -27,7 +27,7 @@ from pydantic import BaseModel, ValidationError
 
 from errand.clock import Clock
 from errand.config import BookOutcomeOdds, Settings
-from errand.db import connect, transaction
+from errand.db import ConnectionPool, transaction
 from errand.domain.money import Price
 from errand.domain.time import days_in_range, iso, ist, parse_iso, to_ist
 from errand.errors import (
@@ -117,7 +117,7 @@ class MockToolEnv:
         scenario: Scenario | None = None,
         settings: Settings | None = None,
     ) -> None:
-        self.conn = ledger if isinstance(ledger, sqlite3.Connection) else connect(ledger)
+        self._pool = ConnectionPool(ledger)
         self.user_id = user_id
         self.clock = clock
         self.rng = rng
@@ -129,6 +129,10 @@ class MockToolEnv:
         seed_ledger(self.conn, to_ist(clock.now()).date())
 
     # ------------------------------------------------------------------ wire API
+
+    @property
+    def conn(self) -> sqlite3.Connection:
+        return self._pool.get()
 
     def call(self, tool: str, args: dict[str, Any]) -> dict[str, Any]:
         """JSON in, JSON out, like an HTTP endpoint. The gateway validates the response."""

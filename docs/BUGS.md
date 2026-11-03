@@ -73,3 +73,26 @@ Each entry: what broke, why, the fix, and the regression test that now guards it
 - **Why:** the "schema not supported, retry with the schema in the prompt" fallback caught *every* `BadRequestError`. Auth, workspace or model-access errors would therefore permanently downgrade the client to unstructured output, hiding the real cause behind a second failure.
 - **Fix:** the fallback now only triggers when the 400 is about the schema/output format. Other 400s surface as `LLMError` with the provider's message. The adapter also supports `ANTHROPIC_WORKSPACE_ID` (sent as `anthropic-workspace-id`), which user-level keys require.
 - **Regression tests:** `tests/test_llm_adapters.py::test_non_schema_400_is_not_mistaken_for_schema_rejection`, `::test_workspace_id_is_sent_as_header`.
+
+## 10. The web app shared one SQLite connection across threads (found by pre-submission review)
+
+- **What broke:** three chat sessions plus the background watcher, driven at once against one `World`, hung until pytest's timeout. In the web app, FastAPI's threadpool and the watcher thread all used the same `sqlite3.Connection`. It was opened with `check_same_thread=False`, so nothing stopped one thread's statements from landing inside another thread's `BEGIN IMMEDIATE`.
+- **Why:** the stores were written for one process with one thread per connection (the eval harness), and `check_same_thread=False` hid the mismatch instead of reporting it.
+- **Fix:** `errand.db.ConnectionPool` gives each thread its own connection to the same database file, so transactions stay private and the file's locks do the serialising. An explicit connection or `:memory:` is still used as-is.
+- **Regression test:** `tests/test_threads.py::test_concurrent_sessions_and_watcher_share_one_world` (hangs on the old code, about 8 s on the new).
+
+## 11. A watcher tick on another tab declared an in-flight booking failed (found by pre-submission review)
+
+- **What broke:** while tab A's `book` call was in flight, the background watcher ticked on tab B for the same user. Startup reconcile runs before every turn, so tab B asked `get_booking_status`, got `not_booked` (the call had not landed yet), marked the intent FAILED and told the user "Nothing was booked". A moment later tab A's booking succeeded.
+- **Why:** reconcile treated every PENDING intent as abandoned. That is only true when no live turn owns it.
+- **Fix:** `recover()` skips intents whose owning session currently holds a live lease. It emits `reconcile.skipped_in_flight`, and the owning turn settles the intent itself. Expired leases (a crashed worker) are still reconciled.
+- **Regression test:** eval `36 other_tab_reconcile_during_book`.
+
+## 12. A lost `book` response was reported as "Nothing was booked" (found by pre-submission review)
+
+- **What broke:** the provider booked, then the response was garbled (`MalformedToolResponse`) or the connection dropped (`UnexpectedToolError`). The agent skipped the status check, went to FAILED_SAFE and said "Nothing was booked or changed". The ledger had a booking. This is a false claim of the opposite kind to I3's.
+- **Why:** only `ToolTimeout` was treated as "outcome unknown". Every other error from the side-effect call fell through to the top-level guard, whose message assumes nothing happened.
+- **Fix:**
+  - `booking.OUTCOME_UNKNOWN` covers timeouts, malformed responses, unexpected transport errors and exhausted retries. For `book`, these go status-first. For cancel and reschedule, they leave the intent PENDING for the idempotent re-send.
+  - The top-level guard now says "couldn't verify" instead of "nothing was booked" whenever the session has a PENDING intent.
+- **Regression tests:** evals `35a book_response_lost_malformed` and `35b book_response_lost_conn_reset`.

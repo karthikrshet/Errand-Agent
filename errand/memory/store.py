@@ -19,7 +19,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from errand.db import connect, transaction
+from errand.db import ConnectionPool, transaction
 from errand.domain.request import ServiceRequest
 from errand.memory.context import Exclusion, MemoryView
 
@@ -88,10 +88,14 @@ class MemoryRecord(BaseModel):
 
 class MemoryStore:
     def __init__(self, db: Path | str | sqlite3.Connection) -> None:
-        self.conn = db if isinstance(db, sqlite3.Connection) else connect(db)
+        self._pool = ConnectionPool(db)
         self.conn.executescript(SCHEMA)
 
     # ------------------------------------------------------------------ writes
+
+    @property
+    def conn(self) -> sqlite3.Connection:
+        return self._pool.get()
 
     def remember(
         self,

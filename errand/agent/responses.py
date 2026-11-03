@@ -192,9 +192,9 @@ def booked(booking_id: str, provider: str, slot: datetime, price_paise: int) -> 
 
 def booking_unverified() -> str:
     return (
-        "The booking request timed out and I couldn't verify the result yet. I have NOT "
-        "confirmed a booking. I'll check the provider's records again before doing anything "
-        "else, so you won't be double-booked."
+        "I couldn't get a clear answer from the provider, so I can't verify the result yet. "
+        "I have NOT confirmed anything. I'll check the provider's records again before doing "
+        "anything else, so nothing happens twice."
     )
 
 

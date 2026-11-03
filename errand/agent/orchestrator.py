@@ -217,8 +217,13 @@ class Agent:
             self._stop_mid_flight(ctx, "approval invalid")
         except Exception as exc:
             ctx.tracer.emit("run.error", error=type(exc).__name__, message=str(exc))
-            ctx.say(r.unexpected_error())
+            ctx.say(r.booking_unverified() if self._in_flight(ctx) else r.unexpected_error())
             self._stop_mid_flight(ctx, type(exc).__name__)
+
+    def _in_flight(self, ctx: RunContext) -> bool:
+        """An approved side effect may have happened: 'nothing was changed' would be a guess."""
+        intent = ctx.store.intent(ctx.state.intent_id) if ctx.state.intent_id else None
+        return intent is not None and intent.status == "PENDING"
 
     def _handled_elsewhere(self, ctx: RunContext) -> None:
         """Lost a race with another process on this session: adopt its state, never overwrite."""
