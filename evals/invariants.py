@@ -15,6 +15,7 @@ I7  every grant was minted while its session was showing that approval (AWAITING
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from typing import Any
 
@@ -166,6 +167,16 @@ def i5_termination(run: EvalRun) -> list[str]:
     return problems
 
 
+# An independent, deliberately broad oracle (not the agent's grounding code): entering a flow
+# that acts on an existing booking needs some cancel/move verb in the user's own words.
+_ACT_ON_BOOKING = re.compile(
+    r"cancel|resched|move|shift|postpone|prepone|push|change|call\s+off|need|scrap|rebook|radd?"
+)
+_ACT_FLOWS = {State.CANCEL_FLOW.value, State.RESCHEDULE_FLOW.value}
+# Moving between these, or back from executing an approved change, is not a new entry.
+_WITHIN_ACT = _ACT_FLOWS | {State.EXECUTING.value}
+
+
 def i6_user_intent(run: EvalRun) -> list[str]:
     problems = []
     reserved = {s.value for s in USER_RESERVED}
@@ -178,8 +189,19 @@ def i6_user_intent(run: EvalRun) -> list[str]:
                 and not user_text
             ):
                 problems.append(f"{e.data.get('to_state')} entered in a run with no user message")
+            elif (
+                e.kind == "state.transition"
+                and e.data.get("to_state") in _ACT_FLOWS
+                and e.data.get("from_state") not in _WITHIN_ACT
+                and not _ACT_ON_BOOKING.search(str(user_text or "").lower())
+            ):
+                problems.append(f"{e.data.get('to_state')} entered from {user_text!r}")
     requests = {
-        str(e.data.get("request_id")): str(e.data.get("confirm_code"))
+        str(e.data.get("request_id")): (
+            str(e.data.get("confirm_code")),
+            str(e.data.get("action") or "book"),
+            bool(e.data.get("unprompted")),
+        )
         for e in run.tracer.of_kind("approval.requested")
     }
     turns = {t.turn_id: t for t in run.world.store.turns(run.settings.user_id)}
@@ -188,11 +210,13 @@ def i6_user_intent(run: EvalRun) -> list[str]:
             problems.append(f"grant {g.data.get('grant_id')} not from the user channel")
             continue
         turn = turns.get(int(str(g.data.get("source_turn_id") or 0)))
-        code = requests.get(str(g.data.get("request_id")), "")
+        code, action, unprompted = requests.get(str(g.data.get("request_id")), ("", "book", False))
         if turn is None or turn.role != "user":
             problems.append(f"grant {g.data.get('grant_id')} has no user turn")
-        elif classify_confirmation(turn.text, code) != Decision.AFFIRM:
+        elif classify_confirmation(turn.text, code, action) != Decision.AFFIRM:
             problems.append(f"grant from non-affirming text {turn.text!r}")
+        elif unprompted and code.lower() not in turn.text.lower():
+            problems.append(f"unprompted card granted without its code: {turn.text!r}")
     executing = [
         e for e in run.tracer.of_kind("state.transition")
         if e.data.get("to_state") == State.EXECUTING.value

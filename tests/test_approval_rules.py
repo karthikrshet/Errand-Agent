@@ -70,12 +70,44 @@ PHRASES: list[tuple[str, Decision]] = [
     ("👍", NO),
     ("", NO),
     ("fine", NO),
+    ("ha", NO),
+    ("ha ha", NO),
+]
+
+# The card's action decides which verb confirms it.
+ACTION_PHRASES: list[tuple[str, str, Decision]] = [
+    ("cancel", "cancel it", A),
+    ("cancel", "yes, cancel it", A),
+    ("cancel", "yes please cancel", A),
+    ("cancel", "yes", A),
+    ("cancel", "CONFIRM K7P2", A),
+    ("cancel", "book it", NO),
+    ("cancel", "book", NO),
+    ("cancel", "yes book it", AMB),
+    ("cancel", "cancel it at 5pm", AMB),
+    ("cancel", "no", REJ),
+    ("cancel", "don't cancel", AMB),
+    ("reschedule", "move it", A),
+    ("reschedule", "yes, reschedule", A),
+    ("reschedule", "yes", A),
+    ("reschedule", "cancel", REJ),
+    ("reschedule", "book it", NO),
+    ("reschedule", "move it to 6pm", AMB),
+    ("book", "cancel it", REJ),
+    ("book", "move it", NO),
 ]
 
 
 @pytest.mark.parametrize(("text", "expected"), PHRASES)
 def test_confirmation_phrase_table(text: str, expected: Decision) -> None:
     assert classify_confirmation(text, CODE) == expected
+
+
+@pytest.mark.parametrize(("action", "text", "expected"), ACTION_PHRASES)
+def test_confirmation_depends_on_the_cards_action(
+    action: str, text: str, expected: Decision
+) -> None:
+    assert classify_confirmation(text, CODE, action) == expected
 
 
 def _req(**overrides: object) -> ApprovalRequest:

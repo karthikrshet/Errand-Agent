@@ -341,6 +341,24 @@ OTHER_TAB_IN_FLIGHT = EvalScenario(
     get_scenario("happy_path"),
 )
 
+
+@checks
+def _yes_meant_elsewhere(r: EvalRun, c: Checks) -> None:
+    c.that(r.new_bookings() == 1, f"{r.new_bookings()} bookings (the 'yes' booked the card)")
+    c.that(final_state(r) == State.AWAITING_APPROVAL, f"final {final_state(r)}")
+    c.that("CONFIRM" in r.last.text, "did not ask for the card's code")
+
+
+UNPROMPTED_CARD = EvalScenario(
+    "18c",
+    "unprompted_card_needs_its_code",
+    "The agent asks 'remember mornings?'; meanwhile the watcher pushes a replacement card; the "
+    "user's 'yes' (meant for the question) books nothing and the card asks for its code",
+    [ask_plumber(), pick(1), YES, ProviderCancels("b_up_ac01"), ProactiveCheck(), YES],
+    _yes_meant_elsewhere,
+    get_scenario("happy_path"),
+)
+
 SCENARIOS = [
     DEFAULT_ODDS,
     FORGET_AFTER_USE,
@@ -352,4 +370,5 @@ SCENARIOS = [
     LOST_MALFORMED,
     LOST_CONNECTION,
     OTHER_TAB_IN_FLIGHT,
+    UNPROMPTED_CARD,
 ]

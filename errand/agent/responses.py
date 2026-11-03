@@ -117,6 +117,21 @@ def ambiguous_confirmation() -> str:
     )
 
 
+def ungrounded_intent(intent: str) -> str:
+    what = "cancel" if intent == "cancel_booking" else "move"
+    return (
+        f"I didn't change anything. I can only {what} a booking when you ask for it in your own "
+        f'words, for example "{what} my AC servicing".'
+    )
+
+
+def code_required(req: ApprovalRequest) -> str:
+    return (
+        'Nothing is booked yet. I raised the card above on my own, so a plain "yes" might '
+        f"have been meant for something else. To approve it, reply CONFIRM {req.confirm_code}."
+    )
+
+
 def code_mismatch(req: ApprovalRequest) -> str:
     return (
         "That confirmation code doesn't match the current request, so nothing was done.\n"

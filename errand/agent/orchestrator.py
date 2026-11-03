@@ -22,6 +22,7 @@ from errand.agent import responses as r
 from errand.agent.approval import Decision, classify_confirmation
 from errand.agent.approval_flow import classify_reply, invalidate_pending, reissue
 from errand.agent.crash import CrashHooks
+from errand.agent.grounding import grounded
 from errand.agent.limits import RunBudget
 from errand.agent.nlu import NLU, BookingRef, NLUResult, system_prompt
 from errand.agent.policy import PolicyViolation
@@ -275,7 +276,7 @@ class Agent:
             self._fallback(ctx, text)
             return
         ctx.tracer.emit("nlu.result", intent=result.intent, result=result)
-        self._dispatch(ctx, result)
+        self._dispatch(ctx, result, text)
 
     def _handle_confirmation(self, ctx: RunContext, text: str) -> bool:
         """Returns True when the message was fully handled as an approval reply."""
@@ -290,6 +291,9 @@ class Agent:
             return True
         if decision == Decision.CODE_MISMATCH:
             ctx.say(r.code_mismatch(req))
+            return True
+        if decision == Decision.CODE_REQUIRED:
+            ctx.say(r.code_required(req))
             return True
         if decision == Decision.REJECT:
             invalidate_pending(ctx, "user declined")
@@ -306,7 +310,7 @@ class Agent:
         if result is not None and result.intent in ACTIONABLE_ON_AMBIGUITY:
             invalidate_pending(ctx, "ambiguous reply asked for a change")
             ctx.tracer.emit("nlu.result", intent=result.intent, result=result)
-            self._dispatch(ctx, result)
+            self._dispatch(ctx, result, text)
         else:
             reissue(ctx, "ambiguous reply")
 
@@ -353,7 +357,11 @@ class Agent:
             ctx.tracer.emit("context.user_message_truncated")
         return nlu.interpret(text, system, built.text, built.manifest.model_dump(mode="json"))
 
-    def _dispatch(self, ctx: RunContext, result: NLUResult) -> None:
+    def _dispatch(self, ctx: RunContext, result: NLUResult, text: str) -> None:
+        if not grounded(result.intent, text):
+            ctx.tracer.emit("security.ungrounded_intent", intent=result.intent)
+            ctx.say(r.ungrounded_intent(result.intent))
+            return
         handlers: dict[str, Callable[[RunContext, NLUResult], None]] = {
             "request": self._on_request,
             "select_option": self._on_select,

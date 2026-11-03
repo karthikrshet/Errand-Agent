@@ -35,9 +35,20 @@ def test_i4_catches_unconfirmed_memory_in_context(
 def test_i6_catches_grant_from_non_affirming_text(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(approval_flow, "classify_confirmation", lambda *_: Decision.AFFIRM)
+    monkeypatch.setattr(approval_flow, "classify_for", lambda *_: Decision.AFFIRM)
     run = execute(_scenario("33"), tmp_path / "r")
     assert any("non-affirming" in p for p in check_all(run)["I6"])
+
+
+def test_i6_catches_cancel_flow_from_ungrounded_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Disable the grounding gate: the gullible model's cancel must then trip I6."""
+    from errand.agent import orchestrator  # noqa: PLC0415
+
+    monkeypatch.setattr(orchestrator, "grounded", lambda *_: True)
+    run = execute(_scenario("06b"), tmp_path / "r")
+    assert any("CANCEL_FLOW entered from" in p for p in check_all(run)["I6"])
 
 
 def test_i3_catches_unverified_success_claim(

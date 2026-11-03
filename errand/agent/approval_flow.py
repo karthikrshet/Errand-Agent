@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from errand.agent import responses as r
-from errand.agent.approval import Action, ApprovalRequest, Decision, classify_confirmation
+from errand.agent.approval import Action, ApprovalRequest, Decision, classify_for
 from errand.agent.runtime import RunContext
 
 
@@ -44,6 +44,7 @@ def request_approval(
         created_at=ctx.clock.now(),
         previous_price_paise=previous_price_paise,
         previous_slot=previous_slot,
+        unprompted=ctx.user_turn_id is None and ctx.state.kind == "proactive",
     )
     ctx.store.save_approval(req, ctx.state.session_id)
     ctx.state.pending_approval = req
@@ -53,6 +54,7 @@ def request_approval(
         action=action,
         fingerprint=req.fingerprint,
         confirm_code=req.confirm_code,
+        unprompted=req.unprompted,
         provider_id=provider_id,
         slot=slot.isoformat(),
         price_paise=price_paise,
@@ -96,6 +98,6 @@ def classify_reply(ctx: RunContext, user_text: str) -> Decision:
     req = ctx.state.pending_approval
     if req is None:
         return Decision.NOT_APPROVAL
-    decision = classify_confirmation(user_text, req.confirm_code)
+    decision = classify_for(req, user_text)
     ctx.tracer.emit("approval.classified", request_id=req.request_id, decision=decision.value)
     return decision

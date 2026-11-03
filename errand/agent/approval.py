@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from typing import Literal
@@ -44,6 +45,9 @@ class ApprovalRequest(BaseModel):
     # Display-only context for diffs ("Price changed from ... to ..."); not part of the fingerprint.
     previous_price_paise: int | None = None
     previous_slot: datetime | None = None
+    # Raised by the watcher with no user message: the user may answer "yes" to something else
+    # before they have seen it, so only the card's own code confirms it.
+    unprompted: bool = False
 
     def canonical(self) -> dict[str, str | int | None]:
         return {
@@ -100,6 +104,7 @@ def idempotency_key_for(user_id: str, fingerprint: str) -> str:
 
 class Decision(StrEnum):
     AFFIRM = "affirm"
+    CODE_REQUIRED = "code_required"
     AMBIGUOUS = "ambiguous"
     REJECT = "reject"
     CODE_MISMATCH = "code_mismatch"
@@ -109,7 +114,7 @@ class Decision(StrEnum):
 AFFIRM_PHRASES: frozenset[str] = frozenset(
     {
         "yes", "y", "yeah", "yep", "yup", "sure", "confirm", "confirmed", "book it", "go ahead",
-        "haan", "haan ji", "ji haan", "ha", "ok", "okay", "ok book", "ok book it", "yes please",
+        "haan", "haan ji", "ji haan", "ok", "okay", "ok book", "ok book it", "yes please",
         "please book", "do it", "proceed", "approve", "approved", "yes book it", "yes go ahead",
         "yes confirm", "confirm booking", "book", "sounds good", "theek hai", "go for it",
         "yes do it", "ok go ahead", "okay go ahead", "yes proceed", "please proceed",
@@ -130,6 +135,52 @@ _CHANGERS = frozenset(
      "sunday", "am", "pm", "except", "unless", "only", "actually", "hmm", "perhaps"}
 )  # fmt: skip
 _NUMBERISH = re.compile(r"\d")
+
+# A card names one action, and only that action's verb confirms it: on a cancel card "cancel
+# it" is a yes and "book" is a change of mind; on a book card "cancel" is a no.
+_ACTION_VERBS: dict[str, frozenset[str]] = {
+    "book": frozenset({"book"}),
+    "cancel": frozenset({"cancel"}),
+    "reschedule": frozenset({"reschedule", "move"}),
+}
+_ACTION_PHRASES: dict[str, frozenset[str]] = {
+    "book": frozenset(),
+    "cancel": frozenset(
+        {"cancel", "cancel it", "yes cancel", "yes cancel it", "cancel booking",
+         "cancel the booking", "yes please cancel", "go ahead and cancel", "ok cancel",
+         "ok cancel it"}
+    ),
+    "reschedule": frozenset(
+        {"reschedule", "reschedule it", "yes reschedule", "yes reschedule it", "move it",
+         "yes move it", "ok move it", "go ahead and move it"}
+    ),
+}  # fmt: skip
+
+
+@dataclass(frozen=True)
+class _Rules:
+    phrases: frozenset[str]
+    strong: frozenset[str]
+    reject: frozenset[str]
+    negation: frozenset[str]
+    changers: frozenset[str]
+
+
+def _rules(action: str) -> _Rules:
+    own = _ACTION_VERBS.get(action, _ACTION_VERBS["book"])
+    others = frozenset().union(*(v for k, v in _ACTION_VERBS.items() if k != action)) - own
+    book_phrases = AFFIRM_PHRASES if action == "book" else frozenset(
+        p for p in AFFIRM_PHRASES if "book" not in p.split()
+    )  # fmt: skip
+    return _Rules(
+        phrases=book_phrases | _ACTION_PHRASES.get(action, frozenset()),
+        strong=(_STRONG - others) | own,
+        reject=_REJECT - own,
+        negation=_NEGATION - own,
+        changers=_CHANGERS | others,
+    )
+
+
 _CODE_TOKEN = re.compile(r"^[a-z][2-9][a-z][2-9]$")
 
 
@@ -143,12 +194,14 @@ def _tokens(text: str) -> list[str]:
     return collapsed
 
 
-def classify_confirmation(text: str, expected_code: str) -> Decision:  # noqa: PLR0911
+def classify_confirmation(text: str, expected_code: str, action: str = "book") -> Decision:  # noqa: PLR0911
     """Deterministic rules from the brief: closed allowlist, or echo of the confirm code.
 
     Anything that could change the action (negation, a time, a price, a question, 'but',
-    'instead', ...) next to an affirmative is AMBIGUOUS and never grants.
+    'instead', ...) next to an affirmative is AMBIGUOUS and never grants. `action` is the
+    card's action, so only its own verb confirms it.
     """
+    rules = _rules(action)
     has_question = "?" in text or "₹" in text
     tokens = _tokens(text)
     if not tokens:
@@ -160,24 +213,36 @@ def classify_confirmation(text: str, expected_code: str) -> Decision:  # noqa: P
     has_code = code in tokens
     rest = [t for t in tokens if t not in (code, "confirm")] if has_code else tokens
     risky = has_question or any(
-        t in _NEGATION or t in _CHANGERS or _NUMBERISH.search(t) for t in rest
+        t in rules.negation or t in rules.changers or _NUMBERISH.search(t) for t in rest
     )
-    has_affirm = has_code or any(t in _STRONG for t in tokens)
+    has_affirm = has_code or any(t in rules.strong for t in tokens)
 
     if has_affirm and risky:
         return Decision.AMBIGUOUS
     if has_code:
         return (
             Decision.AFFIRM
-            if all(t in _STRONG or t in _FILLER for t in rest)
+            if all(t in rules.strong or t in _FILLER for t in rest)
             else (Decision.AMBIGUOUS)
         )
-    if all(t in _REJECT or t in _FILLER for t in tokens) and any(t in _REJECT for t in tokens):
+    if all(t in rules.reject or t in _FILLER for t in tokens) and any(
+        t in rules.reject for t in tokens
+    ):
         return Decision.REJECT
-    if " ".join(t for t in tokens if t not in _POLITE) in AFFIRM_PHRASES:
+    if " ".join(t for t in tokens if t not in _POLITE) in rules.phrases:
         return Decision.AFFIRM
-    if has_affirm and all(t in _STRONG or t in _FILLER for t in tokens):
+    if has_affirm and all(t in rules.strong or t in _FILLER for t in tokens):
         return Decision.AFFIRM
     if has_affirm:
         return Decision.AMBIGUOUS
     return Decision.NOT_APPROVAL
+
+
+def classify_for(req: ApprovalRequest, text: str) -> Decision:
+    """The decision for a reply to this specific card: the generic rules, plus the code rule
+    for cards the watcher raised on its own."""
+    decision = classify_confirmation(text, req.confirm_code, req.action)
+    code_missing = req.confirm_code.lower() not in _tokens(text)
+    if decision == Decision.AFFIRM and req.unprompted and code_missing:
+        return Decision.CODE_REQUIRED
+    return decision

@@ -96,3 +96,17 @@ Each entry: what broke, why, the fix, and the regression test that now guards it
   - `booking.OUTCOME_UNKNOWN` covers timeouts, malformed responses, unexpected transport errors and exhausted retries. For `book`, these go status-first. For cancel and reschedule, they leave the intent PENDING for the idempotent re-send.
   - The top-level guard now says "couldn't verify" instead of "nothing was booked" whenever the session has a PENDING intent.
 - **Regression tests:** evals `35a book_response_lost_malformed` and `35b book_response_lost_conn_reset`.
+
+## 13. A "yes" meant for another question approved a card the watcher had just pushed (found by pre-submission review)
+
+- **What broke:** after a booking the agent asked "Want me to remember that you prefer mornings?". Meanwhile the background watcher pushed a replacement card for a provider cancellation into the chat. The user's "yes", meant for the memory question, booked the replacement.
+- **Why:** a card raised without any user message is delivered asynchronously, so the user may answer something else before seeing it. The confirmation rules could not tell those two cases apart.
+- **Fix:** an `ApprovalRequest` raised by the watcher is marked `unprompted` (display-only, outside the fingerprint). For such a card, only its own code (`CONFIRM K7P2`) grants; a bare "yes" gets `CODE_REQUIRED`, which keeps the card and asks for the code. Invariant I1 checks the same rule from the trace.
+- **Regression tests:** eval `18c unprompted_card_needs_its_code` (books a second time on the old code); eval `18` now shows the bare "yes" being refused before the code confirms.
+
+## 14. A model obeying an injected review could open a cancel card the user never asked for (found by pre-submission review)
+
+- **What broke:** with a "gullible" model, "tell me more about option 1" came back as `cancel_booking` for the user's AC appointment, which put up a real CANCEL card. Approval was still required, but the user's next "ok" cancelled a real booking, and every invariant passed because the user had technically approved it.
+- **Why:** the code only enforced *approval* for consequential actions. It did not enforce that the user had asked for the action in the first place, so the model's interpretation alone decided which card appeared.
+- **Fix:** `agent/grounding.py` requires a matching verb in the user's raw message (cancel, call off, move, reschedule, postpone, …) before a cancel or reschedule flow can start. Otherwise the agent says it changed nothing and traces `security.ungrounded_intent`. I6 now has an independent, broader word oracle for entering those flows.
+- **Regression tests:** eval `06b gullible_cancel_then_ok`; `tests/test_grounding.py`; `tests/test_invariants_have_teeth.py::test_i6_catches_cancel_flow_from_ungrounded_text`.
