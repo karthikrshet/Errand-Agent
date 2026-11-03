@@ -6,21 +6,21 @@
   const css = `
     #__cur{position:fixed;left:-60px;top:-60px;width:30px;height:30px;z-index:2147483647;pointer-events:none;
       transition:left .75s cubic-bezier(.22,.8,.3,1),top .75s cubic-bezier(.22,.8,.3,1);
-      filter:drop-shadow(0 3px 6px rgba(0,0,0,.55))}
-    #__rip{position:fixed;width:54px;height:54px;border-radius:50%;border:3px solid #ffd166;z-index:2147483646;
+      filter:drop-shadow(0 3px 6px rgba(15,23,42,.35))}
+    #__rip{position:fixed;width:54px;height:54px;border-radius:50%;border:3px solid #4f46e5;z-index:2147483646;
       pointer-events:none;opacity:0;transform:translate(-50%,-50%) scale(.3)}
     #__rip.go{animation:__rip .55s ease-out}
     @keyframes __rip{0%{opacity:.95;transform:translate(-50%,-50%) scale(.3)}100%{opacity:0;transform:translate(-50%,-50%) scale(1.5)}}
     #__cap{position:fixed;left:50%;bottom:26px;transform:translate(-50%,8px);max-width:1040px;padding:12px 24px;
-      border-radius:14px;background:rgba(7,9,15,.86);color:#f5f7fb;font:600 21px/1.4 'Segoe UI',system-ui,sans-serif;
+      border-radius:14px;background:rgba(255,255,255,.97);color:#0f172a;font:600 21px/1.45 Inter,'Segoe UI',system-ui,sans-serif;
       text-align:center;z-index:2147483645;opacity:0;transition:opacity .35s,transform .35s;
-      box-shadow:0 10px 34px rgba(0,0,0,.5);border:1px solid rgba(255,255,255,.14);letter-spacing:.1px}
+      box-shadow:0 12px 40px rgba(15,23,42,.16);border:1px solid #e7e9ee;letter-spacing:-.1px}
     #__cap.on{opacity:1;transform:translate(-50%,0)}
-    #__chip{position:fixed;right:22px;top:58px;z-index:2147483645;padding:6px 14px;border-radius:999px;
+    #__chip{position:fixed;right:28px;top:76px;z-index:2147483645;padding:6px 14px;border-radius:999px;
       font:700 12px/1 'Segoe UI',system-ui,sans-serif;letter-spacing:.14em;text-transform:uppercase;
-      color:#0b0f19;background:#ffd166;opacity:0;transition:opacity .4s}
+      color:#ffffff;background:#4f46e5;opacity:0;transition:opacity .4s;box-shadow:0 6px 18px rgba(79,70,229,.3)}
     #__chip.on{opacity:1}
-    .__hl{outline:2px solid #ffd166 !important;background:rgba(255,209,102,.20) !important;border-radius:5px;
+    .__hl{outline:2px solid #4f46e5 !important;background:rgba(79,70,229,.10) !important;border-radius:8px;
       transition:background .3s,outline .3s}
     .__zoom{transition:transform 1.1s cubic-bezier(.22,.8,.3,1);transform-origin:center center}
   `;
@@ -29,7 +29,7 @@
   const cursor = document.createElement('div');
   cursor.id = '__cur';
   cursor.innerHTML = `<svg viewBox="0 0 24 24" width="30" height="30"><path d="M4 2 L4 20 L9 15.5 L12.5 22.5 L15.5 21 L12 14.2 L19 14.2 Z"
-    fill="#ffffff" stroke="#111" stroke-width="1.4" stroke-linejoin="round"/></svg>`;
+    fill="#0f172a" stroke="#ffffff" stroke-width="1.6" stroke-linejoin="round"/></svg>`;
   const ripple = document.createElement('div');
   ripple.id = '__rip';
   const cap = document.createElement('div');
@@ -42,7 +42,7 @@
     // In the real app the chat input sits at the bottom: lift the caption above it.
     // In the real app the newest chat and trace rows are at the bottom: caption on top instead.
     if (location.protocol.startsWith('http')) {
-      cap.style.bottom = 'auto'; cap.style.top = '60px'; cap.style.maxWidth = '760px';
+      cap.style.bottom = 'auto'; cap.style.top = '78px'; cap.style.maxWidth = '760px';
       cap.style.fontSize = '19px';
     }
   };

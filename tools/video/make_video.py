@@ -1,7 +1,8 @@
 """Produce the narrated demo film: docs/demo/errand-agent-demo.mp4 (+ GIF preview and poster).
 
 Pipeline (fully local; no narration text or key leaves the machine):
-1. Narration: each sentence is synthesised with the Windows speech engine (SAPI) to a WAV.
+1. Narration: each sentence is synthesised to a WAV with Kokoro, an open-source neural TTS
+   model running locally (Apache-2.0); the Windows voice is a fallback (VIDEO_TTS=sapi).
 2. Recording: Playwright drives Microsoft Edge at 1280x720. Deck scenes animate tools/video/
    deck.html; app scenes drive the REAL web app (keyless demo mode, fresh database, forced
    mock-world scenario) with an animated cursor that types, clicks and highlights trace rows.
@@ -16,6 +17,8 @@ Run (needs Windows, Edge, and a tool env with playwright + imageio-ffmpeg):
 
 from __future__ import annotations
 
+import contextlib
+import functools
 import os
 import re
 import shutil
@@ -30,6 +33,7 @@ from pathlib import Path
 from typing import Any
 
 import imageio_ffmpeg
+import soundfile
 from playwright.sync_api import Page, sync_playwright
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -40,7 +44,9 @@ HERE = Path(__file__).resolve().parent
 OUT = ROOT / "docs" / "demo"
 PROJECT_PY = ROOT / ".venv" / "Scripts" / "python.exe"
 FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
-VOICE = os.environ.get("VIDEO_VOICE", "Microsoft David Desktop")
+TTS = os.environ.get("VIDEO_TTS", "kokoro")  # "kokoro" (neural, local) or "sapi" (Windows)
+VOICE = os.environ.get("VIDEO_VOICE", "af_heart" if TTS == "kokoro" else "Microsoft David Desktop")
+SPEED = float(os.environ.get("VIDEO_SPEED", "1.0"))
 W, H, FPS = 1280, 720, 30
 GAP_S = 0.45  # silence between sentences
 LEAD_TRIM_S = 0.6  # drop the blank first frames of each recording
@@ -50,6 +56,24 @@ LEAD_TRIM_S = 0.6  # drop the blank first frames of each recording
 
 
 def synthesize(text: str, wav: Path) -> float:
+    """Narrate one sentence. Default: Kokoro, a local open-source neural voice."""
+    if TTS == "sapi":
+        return _sapi(text, wav)
+    samples, rate = _kokoro().create(text, voice=VOICE, speed=SPEED, lang="en-us")
+    soundfile.write(str(wav), samples, rate)
+    return float(len(samples) / rate)
+
+
+@functools.cache
+def _kokoro() -> Any:
+    from kokoro_onnx import Kokoro  # noqa: PLC0415 - optional, heavy
+
+    model_dir = Path(os.environ["KOKORO_DIR"])
+    return Kokoro(str(model_dir / "kokoro-v1.0.onnx"), str(model_dir / "voices-v1.0.bin"))
+
+
+def _sapi(text: str, wav: Path) -> float:
+    """Fallback: the built-in Windows voice (lower quality, no downloads)."""
     txt = wav.with_suffix(".txt")
     txt.write_text(text, encoding="utf-8")
     ps = (
@@ -185,7 +209,7 @@ def eval_lines() -> list[str]:
 
 def record_scene(
     browser: Any, scene: Scene, durs: list[float], work: Path
-) -> tuple[Path, list[float], float]:
+) -> tuple[Path, list[float], float, float]:
     vdir = work / f"rec-{scene.sid}"
     shutil.rmtree(vdir, ignore_errors=True)
     proc = None
@@ -202,15 +226,19 @@ def record_scene(
     ctx.add_init_script(path=str(HERE / "overlay.js"))
     page = ctx.new_page()
     page.goto(url)
-    page.wait_for_load_state("networkidle")
+    # Fonts/icons are cosmetic: never stall the take on the network.
+    with contextlib.suppress(Exception):
+        page.wait_for_load_state("networkidle", timeout=8000)
     if scene.sid == "evals":
         page.evaluate("l => { window.__evalLines = l; }", eval_lines())
     if scene.chip:
         page.evaluate("t => window.__chip(t)", scene.chip)
     driver = Driver(page)
-    page.wait_for_timeout(900)
+    page.wait_for_timeout(600)
+    # Everything before the page is ready is trimmed, so a slow load never shows as dead air.
+    ready = time.monotonic() - t0
     offsets: list[float] = []
-    prev_end = 1.0
+    prev_end = ready
     for i, line in enumerate(scene.lines):
         now = time.monotonic() - t0
         start = max(now, prev_end + GAP_S)
@@ -231,7 +259,7 @@ def record_scene(
     if proc is not None:
         proc.terminate()
     webm = next(vdir.glob("*.webm"))
-    return webm, offsets, end
+    return webm, offsets, end, max(0.0, ready - 0.3)
 
 
 # ----------------------------------------------------------------------------- assembly
@@ -242,14 +270,15 @@ def ff(*args: str) -> None:
 
 
 def assemble_scene(
-    webm: Path, wavs: list[Path], offsets: list[float], end: float, out: Path
+    webm: Path, wavs: list[Path], offsets: list[float], end: float, out: Path, *, lead: float
 ) -> None:
-    length = end - LEAD_TRIM_S
-    inputs: list[str] = ["-ss", f"{LEAD_TRIM_S}", "-t", f"{length:.3f}", "-i", str(webm)]
+    lead = max(lead, LEAD_TRIM_S)
+    length = end - lead
+    inputs: list[str] = ["-ss", f"{lead:.3f}", "-t", f"{length:.3f}", "-i", str(webm)]
     chains = []
     for k, (wav, off) in enumerate(zip(wavs, offsets, strict=True), start=1):
         inputs += ["-i", str(wav)]
-        delay = max(0, int((off - LEAD_TRIM_S) * 1000))
+        delay = max(0, int((off - lead) * 1000))
         chains.append(f"[{k}:a]adelay={delay}|{delay},aformat=channel_layouts=stereo[a{k}]")
     mix = "".join(f"[a{k}]" for k in range(1, len(wavs) + 1))
     fade_out = max(0.0, length - 0.5)
@@ -320,9 +349,10 @@ def main() -> int:
             if not (redo and scene.sid not in redo and part.exists()):
                 wavs = [work / f"{scene.sid}-{i:02d}.wav" for i in range(len(scene.lines))]
                 durs = [synthesize(line.text, w) for line, w in zip(scene.lines, wavs, strict=True)]
-                webm, offsets, end = record_scene(browser, scene, durs, work)
-                assemble_scene(webm, wavs, offsets, end, part)
-                print(f"scene {scene.sid}: {end:.1f}s")
+                webm, offsets, end, lead = record_scene(browser, scene, durs, work)
+                assemble_scene(webm, wavs, offsets, end, part, lead=lead)
+                shown = end - max(lead, LEAD_TRIM_S)
+                print(f"scene {scene.sid}: {shown:.1f}s (page load {lead:.1f}s trimmed)")
             parts.append(part)
             if scene.sid == "booking":
                 booking_part = part
