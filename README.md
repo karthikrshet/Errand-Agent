@@ -39,7 +39,13 @@ uv sync
 make check test eval
 ```
 
-On Windows without `make`, run `uv run python tasks.py check test eval` instead.
+**Windows (PowerShell), without `uv` or `make`:**
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python -m pip install -e . pytest pytest-timeout ruff mypy httpx
+.\.venv\Scripts\python tasks.py check test eval
+```
 
 - `check` runs ruff (lint and format) and `mypy --strict` on `errand/`.
 - `test` runs 263 pytest tests. These include every eval scenario, a 3-seed binomial test of the `book` outcome odds, a 300-iteration-hardened concurrency test, and mutation tests that prove the invariants can fail.
@@ -75,8 +81,15 @@ ANTHROPIC_API_KEY=sk-ant-... make ui                               # live model 
 ERRAND_SCENARIO=timeout_after_success ERRAND_SCRIPT=demo make ui   # force a failure live
 ```
 
-On PowerShell, set the variables with `$env:ERRAND_SCRIPT="demo"` and then run
-`uv run python tasks.py ui`. Open http://localhost:8000.
+Without a key, the UI starts the keyless demo model on its own. On PowerShell, set variables
+with `$env:`, then start the server:
+
+```powershell
+$env:ERRAND_SCENARIO = "timeout_after_success"   # optional: force a failure live
+.\.venv\Scripts\python tasks.py ui
+```
+
+Open http://localhost:8000. Run `Remove-Item Env:ERRAND_SCENARIO` to go back to normal odds.
 
 - A red badge lights up when injection is detected.
 - Approval cards show the confirm code and any price or time diff.
