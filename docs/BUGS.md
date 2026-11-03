@@ -117,3 +117,12 @@ Each entry: what broke, why, the fix, and the regression test that now guards it
 - **Why:** turn scrubbing is whole-word and deliberately skips short or numeric values, because replacing every "10" would corrupt prices and IDs. Numeric facts were therefore never removed from history, despite the message.
 - **Fix:** forgetting also redacts, as a whole, each turn recorded as the memory's evidence plus the assistant reply right after it (`AgentStore.redact_turns`). The value no longer needs to be scrubbable for its source to disappear.
 - **Regression test:** eval `21c memory_forget_numeric_value` (fails on the old code with two I4 leaks).
+
+## 16. Starting the UI without a key answered every message with "Something went wrong" (found running the app)
+
+- **What broke:** running the web app with neither `ANTHROPIC_API_KEY` nor `ERRAND_SCRIPT` set gave "Something went wrong on my side…" for every message. The trace showed `run.error TypeError: Could not resolve authentication method`.
+- **Why:** the Anthropic SDK raises a bare `TypeError`, not an `APIError`, when it has no credentials. The adapter only mapped `APIError` to `LLMError`, so the deterministic fallback never ran and the top-level guard caught it instead.
+- **Fix:**
+  - The adapter raises `LLMError` when no credentials are configured, so the agent degrades normally.
+  - The web app starts the keyless demo model, with a notice on stderr, when no key is set, so `make ui` works out of the box.
+- **Regression tests:** `tests/test_llm_adapters.py::test_missing_api_key_is_an_llm_error_not_a_crash`, `tests/test_web.py::test_ui_without_a_key_starts_the_keyless_demo`.

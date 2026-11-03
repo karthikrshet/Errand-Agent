@@ -11,6 +11,7 @@ import asyncio
 import json
 import os
 import queue
+import sys
 import threading
 import time
 from collections.abc import AsyncIterator
@@ -107,6 +108,13 @@ def _default_llm(settings: Settings) -> LLMClient:
         return ScriptedClient.from_map(demo_script(to_ist(SystemClock().now()).date()))
     if script:
         return ScriptedClient.from_map(json.loads(Path(script).read_text(encoding="utf-8")))
+    if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")):
+        print(
+            "No ANTHROPIC_API_KEY set: starting the keyless demo model (ERRAND_SCRIPT=demo). "
+            "It understands the demo phrases in the README.",
+            file=sys.stderr,
+        )
+        return ScriptedClient.from_map(demo_script(to_ist(SystemClock().now()).date()))
     from errand.llm.anthropic_client import AnthropicClient  # noqa: PLC0415
 
     return AnthropicClient(settings)

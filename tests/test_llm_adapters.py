@@ -130,3 +130,14 @@ def test_workspace_id_is_sent_as_header(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     client = AnthropicClient(Settings())
     assert client.client.default_headers.get("anthropic-workspace-id") == "wrkspc_test"
+
+
+def test_missing_api_key_is_an_llm_error_not_a_crash(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no key the SDK raises a bare TypeError; the agent must see LLMError and degrade."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    client = AnthropicClient(Settings())
+    with pytest.raises(LLMError, match="no ANTHROPIC_API_KEY"):
+        client.complete(
+            LLMRequest(purpose="nlu", system="s", messages=[Message(role="user", content="hi")])
+        )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from errand.app import build_world
@@ -68,3 +69,13 @@ def test_background_watcher_delivers_without_any_click(tmp_path: Path) -> None:
         messages = c.get("/api/sessions/w/inbox").json()["messages"]
         time.sleep(0.05)
     assert any("cancelled your booking" in m for m in messages)
+
+
+def test_ui_without_a_key_starts_the_keyless_demo(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`make ui` with no key and no ERRAND_SCRIPT must still answer the demo phrases."""
+    from errand.web.app import _default_llm  # noqa: PLC0415
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("ERRAND_SCRIPT", raising=False)
+    assert isinstance(_default_llm(Settings()), ScriptedClient)

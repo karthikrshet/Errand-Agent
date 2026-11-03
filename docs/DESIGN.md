@@ -15,7 +15,7 @@ ReviewSummarizer: tool-less sub-agent, closed-enum output; the only model call t
 
 **4. Memory and context.** Explicit facts are active at once. Inferred ones stay `pending_confirmation` and never reach a prompt until confirmed. Corrections supersede. *Forget* scrubs the value from memory rows, summaries and turns, clears derived request fields in every session, and removes the turn that stated it. `ContextBuilder` enforces a hard budget on the exact prompt: 3,000 tokens × 0.85, because tiktoken only approximates Claude's tokenizer, and provider counts are traced alongside. Every call logs a manifest of tokens per section and memory IDs included or excluded, with the reason.
 
-**5. Observability and evals.** One JSONL trace per run covers transitions, `model.call` (tokens, latency, cost), `tool.call` per attempt, `approval.*`, `security.*`, `memory.*`, `limit.hit` and `llm.fallback`, with redaction. Seven invariants (I1–I7) are recomputed from the trace and both databases after every eval, and mutation tests prove they can fail. BUGS.md lists 15 real defects, each with a regression test.
+**5. Observability and evals.** One JSONL trace per run covers transitions, `model.call` (tokens, latency, cost), `tool.call` per attempt, `approval.*`, `security.*`, `memory.*`, `limit.hit` and `llm.fallback`, with redaction. Seven invariants (I1–I7) are recomputed from the trace and both databases after every eval, and mutation tests prove they can fail. BUGS.md lists 16 real defects, each with a regression test.
 
 **Trace excerpt** (`traces/timeout_after_success.jsonl`, eval 10):
 ```

@@ -43,8 +43,15 @@ class AnthropicClient:
             default_headers=headers,
         )
         self._schema_supported = True
+        # Without credentials the SDK raises a bare TypeError on every call; make it an
+        # LLMError so the agent degrades to its deterministic fallback instead of crashing.
+        self._has_credentials = client is not None or bool(
+            os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")
+        )
 
     def complete(self, request: LLMRequest) -> LLMResponse:
+        if not self._has_credentials:
+            raise LLMError("no ANTHROPIC_API_KEY configured")
         try:
             return self._create(request, with_schema=self._schema_supported)
         except anthropic.BadRequestError as exc:
