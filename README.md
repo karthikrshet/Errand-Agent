@@ -2,7 +2,7 @@
 
 [![ci](https://github.com/karthikrshet/Errand-Agent/actions/workflows/ci.yml/badge.svg)](https://github.com/karthikrshet/Errand-Agent/actions/workflows/ci.yml)
 
-[![Errand Agent demo: a live booking with the trace streaming beside the chat](docs/demo/errand-agent-demo.gif)](docs/demo/errand-agent-demo.mp4)
+[![Errand Agent demo: a live booking with the trace streaming beside the chat](docs/demo/errand-agent-demo.gif)](https://github.com/karthikrshet/Errand-Agent/raw/main/docs/demo/errand-agent-demo.mp4)
 
 **▶ [Watch the full narrated demo (4 min)](docs/demo/errand-agent-demo.mp4).** It walks through
 the architecture and the five guarantees, then shows the real app:
