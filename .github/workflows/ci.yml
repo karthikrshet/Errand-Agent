@@ -7,6 +7,12 @@ on:
 jobs:
   offline:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # requires-python is >=3.11, so test the floor as well as the current version.
+        python-version: ["3.11", "3.12"]
     env:
       # Evals and tests must never need a provider key.
       ANTHROPIC_API_KEY: ""
@@ -14,8 +20,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.12"
-      - run: uv sync --all-extras --frozen
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+      - run: uv sync --frozen
       - run: make check
       - run: make test
       - run: make eval

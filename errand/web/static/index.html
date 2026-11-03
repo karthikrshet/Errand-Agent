@@ -10,7 +10,7 @@
 <style>
   :root {
     --bg:#f6f7f9; --panel:#ffffff; --line:#e7e9ee; --line-strong:#d9dde4;
-    --ink:#0f172a; --muted:#64748b; --faint:#94a3b8;
+    --ink:#0f172a; --muted:#64748b; --faint:#6b7280;
     --accent:#4f46e5; --accent-soft:#eef2ff;
     --ok:#059669; --ok-soft:#ecfdf5; --warn:#b45309; --warn-soft:#fffbeb;
     --bad:#e11d48; --bad-soft:#fff1f2; --violet:#7c3aed; --sky:#0284c7;
@@ -55,8 +55,11 @@
   .empty .big { width:46px; height:46px; margin:0 auto 12px; border-radius:14px; display:grid; place-items:center; background:var(--accent-soft); color:var(--accent); }
   .empty .big svg.lucide { width:22px; height:22px; }
   .chips { display:flex; flex-wrap:wrap; gap:8px; justify-content:center; margin-top:14px; }
-  .chip { cursor:pointer; padding:7px 12px; border-radius:999px; border:1px solid var(--line-strong); background:#fff; font-size:12.5px; color:#334155; }
-  .chip:hover { border-color:var(--accent); color:var(--accent); }
+  .chip { cursor:pointer; font-family:inherit; padding:7px 12px; border-radius:999px; border:1px solid var(--line-strong); background:#fff; font-size:12.5px; color:#334155; }
+  .chip:hover, .chip:focus-visible { border-color:var(--accent); color:var(--accent); }
+  .msg.typing { color:var(--muted); font-style:italic; }
+  .msg.err { background:var(--bad-soft); border-color:#fecdd3; color:#9f1239; }
+  #form button[disabled] { opacity:.6; cursor:wait; }
 
   form { display:flex; gap:10px; padding:12px; border-top:1px solid var(--line); }
   input { flex:1; height:44px; padding:0 14px; border-radius:12px; border:1px solid var(--line-strong); background:#fff; color:var(--ink);
@@ -96,23 +99,23 @@
 <main>
   <section class="panel" id="chat">
     <div class="panel-head"><i data-lucide="message-square"></i>Conversation<span class="hint">Approvals are checked by code, not the model</span></div>
-    <div id="log">
+    <div id="log" role="log" aria-live="polite" aria-label="Conversation">
       <div class="empty" id="empty">
         <div class="big"><i data-lucide="wrench"></i></div>
         <div style="font-weight:600;color:var(--ink);font-size:15px">What can I arrange for you?</div>
         <div>Plumbers, electricians, AC servicing and cleaning. Nothing is booked without your explicit confirmation.</div>
         <div class="chips">
-          <span class="chip">Find a plumber for my kitchen tap this week, mornings only, under ₹1,500</span>
-          <span class="chip">Move my AC servicing to Saturday</span>
-          <span class="chip">what do you remember about me</span>
+          <button type="button" class="chip">Find a plumber for my kitchen tap this week, mornings only, under ₹1,500</button>
+          <button type="button" class="chip">Move my AC servicing to Saturday</button>
+          <button type="button" class="chip">what do you remember about me</button>
         </div>
       </div>
     </div>
-    <form id="form"><input id="text" autocomplete="off" placeholder="Ask for a service, e.g. a plumber this week under ₹1,500"><button><i data-lucide="send-horizontal"></i>Send</button></form>
+    <form id="form"><input id="text" autocomplete="off" aria-label="Message" placeholder="Ask for a service, e.g. a plumber this week under ₹1,500"><button><i data-lucide="send-horizontal"></i>Send</button></form>
   </section>
   <section class="panel">
     <div class="panel-head"><i data-lucide="activity"></i>Live trace<span class="hint">state · tools · approvals · security</span></div>
-    <div id="trace"></div>
+    <div id="trace" role="log" aria-label="Live trace"></div>
   </section>
 </main>
 <script>
@@ -160,11 +163,36 @@ function setStatus(data) {
   if (data.status) statusEl.textContent = data.status.replace(/_/g, " ") + (data.approval ? " · code " + data.approval.code : "");
 }
 
+const sendBtn = document.querySelector("#form button");
+function note(text, cls) {
+  document.getElementById("empty")?.remove();
+  const row = document.createElement("div");
+  row.className = "row";
+  const el = document.createElement("div");
+  el.className = "msg " + cls;
+  el.textContent = text;
+  row.append(el);
+  log.appendChild(row);
+  log.scrollTop = log.scrollHeight;
+  return row;
+}
+
 async function post(path, body) {
-  const res = await fetch(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body || {})});
-  const data = await res.json();
-  (data.messages || []).forEach(m => add(m, false));
-  setStatus(data);
+  sendBtn.disabled = true;
+  const typing = note("Working on it…", "typing");
+  try {
+    const res = await fetch(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body || {})});
+    if (!res.ok) throw new Error(`server returned ${res.status}`);
+    const data = await res.json();
+    typing.remove();
+    (data.messages || []).forEach(m => add(m, false));
+    setStatus(data);
+  } catch (err) {
+    typing.remove();
+    note(`Couldn't reach the agent (${err.message}). Nothing was sent to any provider from this message; please try again.`, "err");
+  } finally {
+    sendBtn.disabled = false;
+  }
 }
 
 document.getElementById("form").addEventListener("submit", e => {
@@ -184,10 +212,13 @@ document.getElementById("cancelBtn").onclick = async () => {
 };
 
 setInterval(async () => {
-  const res = await fetch(`/api/sessions/${SID}/inbox`);
-  const data = await res.json();
-  (data.messages || []).forEach(m => add(m, false));
-  setStatus(data);
+  try {
+    const res = await fetch(`/api/sessions/${SID}/inbox`);
+    if (!res.ok) return;
+    const data = await res.json();
+    (data.messages || []).forEach(m => add(m, false));
+    setStatus(data);
+  } catch (_) { /* server restarting; the next poll retries */ }
 }, 3000);
 
 const KEYS = ["tool","from_state","to_state","trigger","reason","outcome","attempt","decision","confirm_code","grant_id","booking_id","idempotency_key","flags","channel","limit","purpose","input_tokens","latency_ms"];

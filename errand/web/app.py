@@ -112,21 +112,24 @@ def _default_llm(settings: Settings) -> LLMClient:
     return AnthropicClient(settings)
 
 
+def _default_world() -> World:
+    settings = Settings()
+    return build_world(
+        settings=settings,
+        llm=_default_llm(settings),
+        scenario=get_scenario(os.environ.get("ERRAND_SCENARIO", "default")),
+        trace_path=settings.traces_dir / "web.jsonl",
+        run_id="web",
+    )
+
+
 def create_app(world: World | None = None, watch_interval_s: float | None = None) -> FastAPI:
     """`watch_interval_s`: background proactive watcher period (0 disables). Defaults to
     ERRAND_WATCH_INTERVAL_S (15 s) for the real app, and to 0 when a world is injected."""
     if watch_interval_s is None:
         env = float(os.environ.get("ERRAND_WATCH_INTERVAL_S", "15"))
         watch_interval_s = env if world is None else 0.0
-    if world is None:
-        settings = Settings()
-        world = build_world(
-            settings=settings,
-            llm=_default_llm(settings),
-            scenario=get_scenario(os.environ.get("ERRAND_SCENARIO", "default")),
-            trace_path=settings.traces_dir / "web.jsonl",
-            run_id="web",
-        )
+    world = world or _default_world()
     hub = TraceHub()
     world.tracer.listeners.append(hub.publish)
     started: set[str] = set()
@@ -135,10 +138,13 @@ def create_app(world: World | None = None, watch_interval_s: float | None = None
     if watch_interval_s > 0:
         watcher.start(watch_interval_s)
 
+    started_lock = threading.Lock()
+
     def ensure_started(sid: str) -> list[str]:
-        if sid in started:
-            return []
-        started.add(sid)
+        with started_lock:  # handlers run on FastAPI's threadpool
+            if sid in started:
+                return []
+            started.add(sid)
         return _startup_messages(world, sid)
 
     def reply_json(sid: str, messages: list[str]) -> dict[str, object]:

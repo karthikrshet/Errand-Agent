@@ -5,7 +5,7 @@ RUN := uv run python tasks.py
 .PHONY: install check lint typecheck fmt test eval ui record trace demo
 
 install:
-	uv sync --all-extras
+	uv sync
 
 check:
 	$(RUN) check

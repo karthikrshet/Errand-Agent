@@ -104,7 +104,8 @@ def approval_card(req: ApprovalRequest, hold_expires_at: datetime | None = None)
         detail = f"booking {req.booking_id} with {req.provider_name} to {when(req.slot)}"
     lines.append(f"Please confirm: {_VERB[req.action]} {detail}.")
     if hold_expires_at is not None:
-        lines.append(f"The slot is held until {to_ist(hold_expires_at):%I:%M %p}.")
+        held = to_ist(hold_expires_at)
+        lines.append(f"The slot is held until {held.hour % 12 or 12}:{held:%M %p}.")
     lines.append(f"Reply 'yes' or 'CONFIRM {req.confirm_code}' to go ahead, or 'no' to stop.")
     return "\n".join(lines)
 
@@ -140,7 +141,7 @@ def code_mismatch(req: ApprovalRequest) -> str:
 
 
 def provider_cancelled(provider: str, slot: datetime) -> str:
-    return f"Heads-up: {provider} cancelled your booking for {when(slot)}. You won't be charged."
+    return f"Heads-up: {provider} cancelled your booking for {when(slot)}."
 
 
 def proactive_later() -> str:
@@ -282,10 +283,18 @@ def reconcile_not_booked() -> str:
 # ----------------------------------------------------------------------------- failures
 
 
+_LIMIT_LABELS = {
+    "run_wall_clock_s": "it was taking too long",
+    "max_tool_calls_per_run": "it needed too many provider lookups",
+    "max_model_calls_per_turn": "it needed too many steps to understand",
+}
+
+
 def limit_hit(limit: str) -> str:
+    why = _LIMIT_LABELS.get(limit, "it hit a safety limit")
     return (
-        f"I stopped because this request hit a safety limit ({limit}). Nothing further was "
-        "booked or changed. Please try again, or simplify the request."
+        f"I stopped this request because {why}. Nothing further was booked or changed. "
+        "Please try again, or ask for one thing at a time."
     )
 
 

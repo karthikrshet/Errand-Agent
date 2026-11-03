@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Annotated
 
@@ -17,6 +18,11 @@ from errand.llm.base import LLMClient
 from errand.llm.scripted import ScriptedClient
 from errand.observability.trace import TraceEvent, load_trace
 from errand.tools.scenarios import get_scenario
+
+# Windows consoles default to cp1252, which cannot print "₹"; never crash on a reply.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 trace_app = typer.Typer(no_args_is_help=True)

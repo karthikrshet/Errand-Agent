@@ -217,7 +217,7 @@ CONFLICT = EvalScenario(
 
 @checks
 def _tool_cap(r: EvalRun, c: Checks) -> None:
-    c.that("safety limit" in r.last.text, "no limit message")
+    c.that("I stopped this request because" in r.last.text, "no limit message")
     c.that(r.tracer.of_kind("limit.hit"), "limit not traced")
     c.that(final_state(r) == State.GATHERING, f"final {final_state(r)}")
     c.that(len(r.tool_calls()) <= 3, "exceeded the cap")
@@ -237,7 +237,7 @@ TOOL_CAP = EvalScenario(
 def _wall_clock(r: EvalRun, c: Checks) -> None:
     hits = r.tracer.of_kind("limit.hit")
     c.that(hits and hits[0].data.get("limit") == "run_wall_clock_s", "wall clock not enforced")
-    c.that("safety limit" in r.last.text, "no limit message")
+    c.that("I stopped this request because" in r.last.text, "no limit message")
 
 
 WALL_CLOCK = EvalScenario(
