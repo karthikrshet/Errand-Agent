@@ -198,9 +198,18 @@ def approval_invalidated(reason: str) -> str:
 # ----------------------------------------------------------------------------- outcomes
 
 
+# The only phrases that claim a side effect happened. Invariant I3 imports these, so a reworded
+# success message can never slip past it.
+BOOKED = "Booked and verified"
+CANCELLED = "Cancelled and verified"
+RESCHEDULED = "Rescheduled and verified"
+RECONCILED = "went through and is verified"
+SUCCESS_PHRASES = (BOOKED, CANCELLED, RESCHEDULED, RECONCILED)
+
+
 def booked(booking_id: str, provider: str, slot: datetime, price_paise: int) -> str:
     return (
-        f"Booked and verified: {provider} on {when(slot)} for {format_inr(price_paise)}. "
+        f"{BOOKED}: {provider} on {when(slot)} for {format_inr(price_paise)}. "
         f"Booking ID {booking_id}."
     )
 
@@ -230,11 +239,11 @@ def hold_expired_lost() -> str:
 
 
 def cancelled(booking_id: str, provider: str, slot: datetime) -> str:
-    return f"Cancelled and verified: booking {booking_id} with {provider} on {when(slot)}."
+    return f"{CANCELLED}: booking {booking_id} with {provider} on {when(slot)}."
 
 
 def rescheduled(booking_id: str, provider: str, slot: datetime) -> str:
-    return f"Rescheduled and verified: booking {booking_id} with {provider} is now {when(slot)}."
+    return f"{RESCHEDULED}: booking {booking_id} with {provider} is now {when(slot)}."
 
 
 def slot_conflict(slot: datetime, alternatives: Sequence[datetime]) -> str:
@@ -260,7 +269,7 @@ def which_booking(lines: Sequence[str]) -> str:
 
 
 def reconcile_booked(booking_id: str) -> str:
-    return f"Update on your earlier booking: it went through and is verified (ID {booking_id})."
+    return f"Update on your earlier booking: it {RECONCILED} (ID {booking_id})."
 
 
 def reconcile_not_booked() -> str:
@@ -285,6 +294,10 @@ def tool_unavailable(tool: str) -> str:
         f"The provider service isn't responding right now ({tool}). Nothing was booked or "
         "changed. Please try again in a moment."
     )
+
+
+def removed_turn() -> str:
+    return "[message removed at your request]"
 
 
 def unexpected_error() -> str:

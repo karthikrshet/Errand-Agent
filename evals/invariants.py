@@ -20,16 +20,11 @@ from collections import Counter
 from typing import Any
 
 from errand.agent.approval import Decision, classify_confirmation, idempotency_key_for
+from errand.agent.responses import SUCCESS_PHRASES
 from errand.agent.state import USER_RESERVED, State
 from evals.harness import EvalRun
 
 SIDE_EFFECTS = {"book", "cancel", "reschedule"}
-SUCCESS_PHRASES = (
-    "Booked and verified",
-    "Cancelled and verified",
-    "Rescheduled and verified",
-    "went through and is verified",
-)
 
 
 def check_all(run: EvalRun) -> dict[str, list[str]]:

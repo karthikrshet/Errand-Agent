@@ -110,3 +110,10 @@ Each entry: what broke, why, the fix, and the regression test that now guards it
 - **Why:** the code only enforced *approval* for consequential actions. It did not enforce that the user had asked for the action in the first place, so the model's interpretation alone decided which card appeared.
 - **Fix:** `agent/grounding.py` requires a matching verb in the user's raw message (cancel, call off, move, reschedule, postpone, …) before a cancel or reschedule flow can start. Otherwise the agent says it changed nothing and traces `security.ungrounded_intent`. I6 now has an independent, broader word oracle for entering those flows.
 - **Regression tests:** eval `06b gullible_cancel_then_ok`; `tests/test_grounding.py`; `tests/test_invariants_have_teeth.py::test_i6_catches_cancel_flow_from_ungrounded_text`.
+
+## 15. "Forget my earliest time" left the fact in the stored conversation (found by pre-submission review)
+
+- **What broke:** after "Never book me before 10 a.m., remember that" and then "forget my earliest time", the agent replied "removed it from our history". But the source turn and the reply that echoed it ("earliest time: 10:00") were still stored, and the next prompt's recent turns carried both. Invariant I4 caught it once the eval marked those strings as forgotten.
+- **Why:** turn scrubbing is whole-word and deliberately skips short or numeric values, because replacing every "10" would corrupt prices and IDs. Numeric facts were therefore never removed from history, despite the message.
+- **Fix:** forgetting also redacts, as a whole, each turn recorded as the memory's evidence plus the assistant reply right after it (`AgentStore.redact_turns`). The value no longer needs to be scrubbable for its source to disappear.
+- **Regression test:** eval `21c memory_forget_numeric_value` (fails on the old code with two I4 leaks).

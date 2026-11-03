@@ -1,12 +1,13 @@
 """Agent-side persistence (separate database from the provider's ledger).
 
-The guarantees that matter live in the schema, not in Python:
-* `grants.consumed_at` is set with a conditional UPDATE inside `BEGIN IMMEDIATE`, and the
-  intent row is created in the same transaction. Two concurrent confirmations therefore cannot
-  both proceed: exactly one sees `rowcount == 1`.
-* `booking_intents.idempotency_key` is UNIQUE, so a duplicate intent is impossible even if the
-  per-session lock were bypassed.
-* At most one *active* grant per fingerprint (partial unique index).
+The guarantees that matter live in the database, not in Python:
+* Confirming is one `BEGIN IMMEDIATE` transaction: a conditional
+  `UPDATE approvals SET status='granted' ... WHERE status='pending'` (compare-and-swap), then the
+  grant row (written already consumed) and the PENDING intent. Two concurrent confirmations
+  therefore cannot both proceed: exactly one sees `rowcount == 1`.
+* `approvals.fingerprint`, `grants.fingerprint` and `booking_intents.idempotency_key` are
+  UNIQUE, so a second grant or a duplicate intent is impossible even if the per-session lock
+  were bypassed.
 """
 
 from __future__ import annotations
@@ -67,8 +68,8 @@ CREATE TABLE IF NOT EXISTS grants (
     issued_at TEXT NOT NULL,
     consumed_at TEXT
 );
-CREATE UNIQUE INDEX IF NOT EXISTS grants_one_active
-    ON grants(fingerprint) WHERE consumed_at IS NULL;
+DROP INDEX IF EXISTS grants_one_active;
+CREATE UNIQUE INDEX IF NOT EXISTS grants_one_per_fingerprint ON grants(fingerprint);
 CREATE TABLE IF NOT EXISTS proactive_seen (
     user_id TEXT NOT NULL,
     booking_id TEXT NOT NULL,
@@ -217,6 +218,34 @@ class AgentStore:
                         "UPDATE turns SET text = ? WHERE turn_id = ?", (new, row["turn_id"])
                     )
                     changed += 1
+        return changed
+
+    def redact_turns(self, user_id: str, turn_ids: list[int], placeholder: str) -> int:
+        """Replace whole turns, plus the assistant reply right after each (which echoed it).
+
+        Value scrubbing cannot reach short or numeric facts ("never before 10"), so the turn
+        that stated the fact is removed as a whole instead.
+        """
+        changed = 0
+        with transaction(self.conn):
+            for turn_id in turn_ids:
+                row = self.conn.execute(
+                    "SELECT session_id FROM turns WHERE turn_id = ? AND user_id = ?",
+                    (turn_id, user_id),
+                ).fetchone()
+                if row is None:
+                    continue
+                echo = self.conn.execute(
+                    "SELECT turn_id FROM turns WHERE session_id = ? AND turn_id > ? "
+                    "ORDER BY turn_id LIMIT 1",
+                    (row["session_id"], turn_id),
+                ).fetchone()
+                targets = [turn_id] + ([echo["turn_id"]] if echo is not None else [])
+                for target in targets:
+                    changed += self.conn.execute(
+                        "UPDATE turns SET text = ? WHERE turn_id = ? AND text != ?",
+                        (placeholder, target, placeholder),
+                    ).rowcount
         return changed
 
     # ------------------------------------------------------------------ approvals / grants

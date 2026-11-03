@@ -1,1 +1,1 @@
-"""LLMClient protocol and Anthropic / OpenAI / Scripted adapters."""
+"""LLMClient protocol and the Anthropic, Scripted and Cassette adapters."""

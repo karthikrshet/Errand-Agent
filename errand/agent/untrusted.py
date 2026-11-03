@@ -14,14 +14,18 @@ import unicodedata
 
 from pydantic import BaseModel
 
-# Zero-width, bidi-control, word-joiner, BOM and soft-hyphen code points (built from ints so the
-# source itself contains no invisible characters).
+# Zero-width, bidi-control and isolate, word-joiner, BOM, soft-hyphen and Unicode "tag"
+# code points (built from ints so the source itself contains no invisible characters). Tags
+# (U+E0000-E007F) can spell out a whole hidden ASCII instruction that renders as nothing.
 _INVISIBLE_RANGES = (
     (0x200B, 0x200F),
     (0x202A, 0x202E),
     (0x2060, 0x2064),
+    (0x2066, 0x2069),
+    (0x180E, 0x180E),
     (0xFEFF, 0xFEFF),
     (0xAD, 0xAD),
+    (0xE0000, 0xE007F),
 )
 _INVISIBLE = re.compile(
     "[" + "".join(f"{re.escape(chr(a))}-{re.escape(chr(b))}" for a, b in _INVISIBLE_RANGES) + "]"

@@ -15,9 +15,6 @@ dependencies = [
     "rich>=13.7",
 ]
 
-[project.optional-dependencies]
-openai = ["openai>=1.40"]
-
 [project.scripts]
 errand = "errand.cli:app"
 

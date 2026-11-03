@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from errand.domain.money import Price
 
@@ -114,6 +114,13 @@ class BookOutput(_Frozen):
     booking_id: str | None = None
     hold_id: str
 
+    @model_validator(mode="after")
+    def _booked_has_id(self) -> BookOutput:
+        # A "booked" reply without an ID is malformed, not a success we could report.
+        if self.outcome == "booked" and not self.booking_id:
+            raise ValueError("booked without booking_id")
+        return self
+
 
 # --- get_booking_status ---
 
@@ -127,6 +134,12 @@ class BookingStatusOutput(_Frozen):
     status: Literal["booked", "not_booked", "unknown_hold"]
     booking_id: str | None = None
     hold_expired: bool | None = None
+
+    @model_validator(mode="after")
+    def _booked_has_id(self) -> BookingStatusOutput:
+        if self.status == "booked" and not self.booking_id:
+            raise ValueError("booked without booking_id")
+        return self
 
 
 # --- cancel ---

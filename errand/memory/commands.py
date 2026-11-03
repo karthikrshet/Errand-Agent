@@ -100,12 +100,19 @@ def update(ctx: RunContext, op: MemoryOp) -> None:
 def forget(ctx: RunContext, op: MemoryOp) -> None:
     """Forget a fact everywhere it can feed a prompt: memory rows, request fields filled from
     it (in every session), rolling summaries, and stored conversation turns."""
-    ids = [m.memory_id for m in ctx.memory.records(ctx.user_id) if m.key == op.key]
+    records = [m for m in ctx.memory.records(ctx.user_id) if m.key == op.key]
+    ids = [m.memory_id for m in records]
+    source_turns = [
+        int(m.evidence.removeprefix("turn:"))
+        for m in records
+        if m.evidence and m.evidence.startswith("turn:") and m.evidence[5:].isdigit()
+    ]
     values = ctx.memory.forget(ctx.user_id, op.key, ctx.clock.now())
     _statuses(ctx, dict.fromkeys(ids, "forgotten"))
     cleared = forget_in_state(ctx.state, op.key, values)
     other_sessions = _forget_in_other_sessions(ctx, op.key, values)
     scrubbed_turns = ctx.store.scrub_turns(ctx.user_id, values)
+    scrubbed_turns += ctx.store.redact_turns(ctx.user_id, source_turns, r.removed_turn())
     ctx.tracer.emit("memory.forget", key=op.key, versions=len(values),
                     request_fields_cleared=cleared, other_sessions=other_sessions,
                     turns_scrubbed=scrubbed_turns)  # fmt: skip

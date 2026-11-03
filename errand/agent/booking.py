@@ -147,8 +147,7 @@ def _book(ctx: RunContext, intent: BookingIntent) -> None:
             status = _status(ctx, intent)
             if status is None:
                 return
-            if status.status == "booked":
-                assert status.booking_id is not None
+            if status.status == "booked" and status.booking_id:
                 _succeeded(ctx, intent, status.booking_id)
                 return
             if status.hold_expired:
@@ -164,8 +163,7 @@ def _book(ctx: RunContext, intent: BookingIntent) -> None:
 
 
 def _handle_book_output(ctx: RunContext, intent: BookingIntent, out: c.BookOutput) -> None:
-    if out.outcome == "booked":
-        assert out.booking_id is not None
+    if out.outcome == "booked" and out.booking_id:
         _succeeded(ctx, intent, out.booking_id)
     elif out.outcome == "slot_taken":
         _slot_taken(ctx, intent)
@@ -199,13 +197,17 @@ def _succeeded(ctx: RunContext, intent: BookingIntent, booking_id: str) -> None:
     ctx.crash.hit("after_booking_before_state_save")
     ctx.state.hold = None
     ctx.move(State.COMPLETED, "tool_result", f"verified {booking_id}")
+    ctx.say(_success_message(req, booking_id))
     if req.action == "book":
-        ctx.say(r.booked(booking_id, req.provider_name, req.slot, req.price_paise))
         _maybe_infer(ctx)
-    elif req.action == "cancel":
-        ctx.say(r.cancelled(booking_id, req.provider_name, req.slot))
-    else:
-        ctx.say(r.rescheduled(booking_id, req.provider_name, req.slot))
+
+
+def _success_message(req: ApprovalRequest, booking_id: str) -> str:
+    if req.action == "book":
+        return r.booked(booking_id, req.provider_name, req.slot, req.price_paise)
+    if req.action == "cancel":
+        return r.cancelled(booking_id, req.provider_name, req.slot)
+    return r.rescheduled(booking_id, req.provider_name, req.slot)
 
 
 def _slot_taken(ctx: RunContext, intent: BookingIntent) -> None:
@@ -302,9 +304,10 @@ def _finish_from_intent(ctx: RunContext, intent: BookingIntent) -> None:
         reconcile_intent(ctx, intent)
         return
     if intent.status == "SUCCEEDED" and intent.result:
-        req = intent.request
-        ctx.say(r.booked(intent.result.get("booking_id", ""), req.provider_name, req.slot,
-                         req.price_paise))  # fmt: skip
+        booking_id = intent.result.get("booking_id", "")
+        ctx.tracer.emit("booking.verified", intent_id=intent.intent_id, booking_id=booking_id,
+                        action=intent.action, via="intent_record")  # fmt: skip
+        ctx.say(_success_message(intent.request, booking_id))
     else:
         ctx.say(r.reconcile_not_booked())
     settle_session(ctx, intent)
@@ -377,8 +380,7 @@ def reconcile_intent(ctx: RunContext, intent: BookingIntent) -> None:
     except ErrandError as exc:
         ctx.tracer.emit("reconcile.deferred", intent_id=intent.intent_id, error=str(exc))
         return
-    if status.status == "booked":
-        assert status.booking_id is not None
+    if status.status == "booked" and status.booking_id:
         ctx.store.set_intent(
             intent.intent_id, "SUCCEEDED", {"booking_id": status.booking_id}, ctx.clock.now()
         )

@@ -359,9 +359,48 @@ UNPROMPTED_CARD = EvalScenario(
     get_scenario("happy_path"),
 )
 
+
+def _mark_forgot_hour(r: EvalRun) -> None:
+    r.forgotten_values += ["Never book me before 10", "earliest time: 10:00"]
+    r.forget_from_request = len(r.llm.requests)
+
+
+@checks
+def _forget_numeric(r: EvalRun, c: Checks) -> None:
+    turns = [t.text for t in r.world.store.turns("u_demo")]
+    c.that(not any("before 10" in t for t in turns), "source turn kept in history")
+    c.that(not any("10:00" in t for t in turns), "echo of the value kept in history")
+    c.that(r.replies[-1].state.request.earliest_hour is None, "forgotten hour still applied")
+
+
+FORGET_NUMERIC = EvalScenario(
+    "21c",
+    "memory_forget_numeric_value",
+    "'Never book me before 10' is remembered, then forgotten: the value is too short to scrub "
+    "as text, so the turn that stated it and the reply that echoed it are removed whole; no "
+    "later prompt contains either",
+    [
+        Say(
+            "Never book me before 10 a.m., remember that",
+            nlu("request", earliest_hour=10, remember=True),
+        ),
+        Say("forget my earliest time", nlu("memory_forget", memory={"key": "earliest_hour"})),
+        Do(_mark_forgot_hour),
+        Say(
+            "Find a plumber in Indiranagar this week",
+            nlu(
+                "request", service="plumber", area="Indiranagar", date_start=TODAY, date_end=SUNDAY
+            ),
+        ),
+    ],
+    _forget_numeric,
+    get_scenario("happy_path"),
+)
+
 SCENARIOS = [
     DEFAULT_ODDS,
     FORGET_AFTER_USE,
+    FORGET_NUMERIC,
     LONG_MESSAGE_BUDGET,
     STALE_CARD,
     TARGET_GONE,
