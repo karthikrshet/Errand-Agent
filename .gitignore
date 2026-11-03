@@ -25,3 +25,11 @@ CLAUDE.md
 docs/ASSIGNMENT.pdf
 *.ledger-wal
 *.ledger-shm
+
+# personal notes and local tooling (kept on disk, not part of the submission)
+docs/DEMO_SCRIPT.md
+docs/ASSESSMENT_REPORT.md
+tools/video/
+loom-*.db*
+.videnv/
+kokoro/
