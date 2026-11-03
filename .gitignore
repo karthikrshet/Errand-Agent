@@ -23,3 +23,5 @@ evals/.runs/
 CLAUDE.md
 .claude/
 docs/ASSIGNMENT.pdf
+*.ledger-wal
+*.ledger-shm
